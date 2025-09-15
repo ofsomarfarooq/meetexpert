@@ -6,34 +6,38 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-    <nav class="navbar">
+  <nav class="navbar">
     <div class="logo">MeetExpert</div>
-    {{!-- <input type="text" placeholder="Search experts, skills, companies..."> --}}
     <ul>
-      <li><a href="/">Home</a></li>
-      <li><a href="#">Messenger</a></li>
-      <li><a href="#">Notifications</a></li>
+      {{#if user}}
+        <li class="dropdown">
+          <img src="{{#if user.profile_picture}}{{user.profile_picture}}{{else}}/default-avatar.png{{/if}}" alt="Avatar" class="avatar-btn">
+          <div class="dropdown-content">
+            <a href="/profile">My Profile</a>
+            <a href="/settings">Settings</a>
+            <a href="/auth/logout">Logout</a>
+          </div>
+        </li>
+      {{else}}
+        <li><a href="/">Home</a></li>
         <li><a href="/login">Login</a></li>
         <li><a href="/register">Register</a></li>
-      {{!-- <li class="dropdown">
-        <img src="assets/avatar.png" alt="Avatar" class="avatar-btn">
-        <div class="dropdown-content">
-          <a href="#">My Profile</a>
-          <a href="#">Settings</a>
-          <a href="login.html">Logout</a>
-        </div>
-      </li> --}}
+      {{/if}}
     </ul>
   </nav>
 
   <div class="form-container">
     <h2>Login</h2>
-    <form>
-      <input type="email" placeholder="Email" required>
-      <input type="password" placeholder="Password" required>
+    {{#if message}}
+      <h4 class="alert alert-danger mt-2">{{message}}</h4>
+    {{/if}}
+    <form action="/auth/login" method="POST">
+      <input type="email" placeholder="Email" name="email" required>
+      <input type="password" placeholder="Password" name="password" required>
       <button type="submit">Login</button>
-      <p>Don’t have an account? <a href="register.html">Register</a></p>
+      <p>Don’t have an account? <a href="/register">Register</a></p>
     </form>
   </div>
+  <script src="/script.js"></script>
 </body>
 </html>

@@ -154,3 +154,31 @@ form button:hover {
     padding: 8px;
   }
 }
+.avatar-btn {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid #ffffff;
+}
+
+.avtoptn{
+  color: blue;
+}
+
+.navbar .dropdown-content {
+  background: #fff;
+  color: #000;
+}
+
+.navbar .dropdown-content a {
+  color: #000 !important;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.navbar .dropdown-content a:hover {
+  background: #f5f5f5;
+  color: #000;
+}

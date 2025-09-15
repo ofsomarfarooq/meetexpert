@@ -2,50 +2,50 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>MeetExpert - Home</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+  <title>MeetExpert - Register</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <nav class="navbar">
     <div class="logo">MeetExpert</div>
-    {{!-- <input type="text" placeholder="Search experts, skills, companies..."> --}}
     <ul>
-      <li><a href="/">Home</a></li>
-      <li><a href="#">Messenger</a></li>
-      <li><a href="#">Notifications</a></li>
+      {{#if user}}
+        <li class="dropdown">
+          <img src="{{#if user.profile_picture}}{{user.profile_picture}}{{else}}/default-avatar.png{{/if}}" alt="Avatar" class="avatar-btn">
+          <div class="dropdown-content">
+            <a href="/profile">My Profile</a>
+            <a href="/settings">Settings</a>
+            <a href="/auth/logout">Logout</a>
+          </div>
+        </li>
+      {{else}}
+        <li><a href="/">Home</a></li>
         <li><a href="/login">Login</a></li>
         <li><a href="/register">Register</a></li>
-      {{!-- <li class="dropdown">
-        <img src="assets/avatar.png" alt="Avatar" class="avatar-btn">
-        <div class="dropdown-content">
-          <a href="#">My Profile</a>
-          <a href="#">Settings</a>
-          <a href="login.html">Logout</a>
-        </div>
-      </li> --}}
+      {{/if}}
     </ul>
   </nav>
 
   <main>
     <div class="form-container">
-    <h2>Register</h2>
-    <form action="/auth/register" method="POST" enctype="application/x-www-form-urlencoded">
-      <input type="text" placeholder="First Name" id="first_name" name="first_name" >
-      <input type="text" placeholder="Last Name" id="last_name" name="last_name" required>
-      <input type="email" placeholder="Email" id="email" name="email" required>
-      <input type="password" placeholder="Password" id="password_hash" name="password_hash" required>
-      <input type="password" placeholder="Confirm Password" id="password_hash2"  name="password_hash2"  required>
-      <input type="text" placeholder="Company (optional)" id="company" name="company">
-      <input type="text" placeholder="Skills (comma separated)" id="role" name="role" required>
-      <button type="submit">Register</button>
-      <p>Already have an account? <a href="login.html">Login</a></p>
-    </form>
-  </div>
-
-  {{#if message}}
-    <h4 class="alert alert-danger mt-4">{{message}}</h4>
-  {{/if}}
+      <h2>Register</h2>
+      {{#if message}}
+        <h4 class="alert alert-danger mt-2">{{message}}</h4>
+      {{/if}}
+      <form action="/auth/register" method="POST" enctype="multipart/form-data">
+        <input type="text" placeholder="First Name" id="first_name" name="first_name">
+        <input type="text" placeholder="Last Name" id="last_name" name="last_name" required>
+        <input type="email" placeholder="Email" id="email" name="email" required>
+        <input type="password" placeholder="Password" id="password_hash" name="password_hash" required>
+        <input type="password" placeholder="Confirm Password" id="password_hash2"  name="password_hash2"  required>
+        <input type="text" placeholder="Company (optional)" id="company" name="company">
+        <input type="text" placeholder="Skills (comma separated)" id="role" name="role" required>
+        <label>Profile Picture (JPEG/PNG, max 2MB):</label>
+        <input type="file" name="profile_picture" accept="image/*">
+        <button type="submit">Register</button>
+        <p>Already have an account? <a href="/login">Login</a></p>
+      </form>
+    </div>
   </main>
 
   <script src="/script.js"></script>
