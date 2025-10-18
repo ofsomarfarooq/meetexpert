@@ -1,0 +1,23 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
+@import "tailwindcss";
+@plugin "daisyui";
+
+/* Global modern base styles */
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    @apply min-h-screen bg-gradient-to-b from-base-100 to-base-200 text-base-content;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-bold text-base-content;
+  }
+
+  a {
+    @apply text-primary hover:underline;
+  }
+}

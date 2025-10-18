@@ -1,0 +1,550 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider     = "mysql"
+  url          = env("DATABASE_URL")
+  relationMode = "foreignKeys"
+}
+
+model admin_log {
+  log_id                             BigInt    @id @default(autoincrement())
+  admin_id                           Int
+  action                             String    @db.VarChar(255)
+  target_user                        Int?
+  meta                               String?   @db.LongText
+  created_at                         DateTime? @default(now()) @db.DateTime(0)
+  users_admin_log_admin_idTousers    users     @relation("admin_log_admin_idTousers", fields: [admin_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "admin_log_ibfk_1")
+  users_admin_log_target_userTousers users?    @relation("admin_log_target_userTousers", fields: [target_user], references: [user_id], onUpdate: Restrict, map: "admin_log_ibfk_2")
+
+  @@index([admin_id], map: "admin_id")
+  @@index([target_user], map: "target_user")
+}
+
+model badges {
+  badge_id    Int           @id @default(autoincrement())
+  code        String        @unique(map: "code") @db.VarChar(50)
+  label       String        @db.VarChar(100)
+  user_badges user_badges[]
+}
+
+model blocks {
+  blocker_id                     Int
+  blocked_id                     Int
+  created_at                     DateTime? @default(now()) @db.DateTime(0)
+  users_blocks_blocker_idTousers users     @relation("blocks_blocker_idTousers", fields: [blocker_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "blocks_ibfk_1")
+  users_blocks_blocked_idTousers users     @relation("blocks_blocked_idTousers", fields: [blocked_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "blocks_ibfk_2")
+
+  @@id([blocker_id, blocked_id])
+  @@index([blocked_id], map: "blocked_id")
+}
+
+model chats {
+  chat_id         Int           @id @default(autoincrement())
+  subscription_id Int
+  created_at      DateTime?     @default(now()) @db.DateTime(0)
+  subscriptions   subscriptions @relation(fields: [subscription_id], references: [subscription_id], onDelete: Cascade, onUpdate: Restrict, map: "chats_ibfk_1")
+  messages        messages[]
+
+  @@index([subscription_id], map: "subscription_id")
+}
+
+model companies {
+  company_id       Int                @id @default(autoincrement())
+  company_name     String             @unique(map: "company_name") @db.VarChar(150)
+  location         String?            @db.VarChar(150)
+  website          String?            @db.VarChar(255)
+  created_at       DateTime?          @default(now()) @db.DateTime(0)
+  updated_at       DateTime?          @default(now()) @db.DateTime(0)
+  deleted_at       DateTime?          @db.DateTime(0)
+  user_job_history user_job_history[]
+  users            users[]
+}
+
+model email_verification_tokens {
+  id         BigInt    @id @default(autoincrement())
+  user_id    Int
+  token      String    @unique(map: "token") @db.Char(64)
+  expires_at DateTime  @db.DateTime(0)
+  created_at DateTime? @default(now()) @db.DateTime(0)
+  users      users     @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "email_verification_tokens_ibfk_1")
+
+  @@index([user_id], map: "user_id")
+}
+
+model expert_profiles {
+  expert_id      Int                          @id
+  price_model    expert_profiles_price_model? @default(monthly)
+  price_amount   Decimal?                     @default(0.00) @db.Decimal(10, 2)
+  currency       String?                      @default("USD") @db.Char(3)
+  overall_rating Decimal?                     @default(0.00) @db.Decimal(3, 2)
+  is_verified    Boolean?                     @default(false)
+  created_at     DateTime?                    @default(now()) @db.DateTime(0)
+  updated_at     DateTime?                    @default(now()) @db.DateTime(0)
+  users          users                        @relation(fields: [expert_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "expert_profiles_ibfk_1")
+  posts          posts[]
+  ratings        ratings[]
+
+  @@index([overall_rating, price_amount], map: "idx_expert_profiles_sort")
+}
+
+model expert_requests {
+  request_id    Int                    @id @default(autoincrement())
+  user_id       Int
+  company       String?
+  description   String                 @db.Text
+  position      String?
+  skill         String
+  proof_url     String?                @db.VarChar(512)
+  status        expert_requests_status @default(pending)
+  admin_message String?                @db.Text
+  created_at    DateTime               @default(now()) @db.Timestamp(0)
+  reviewed_at   DateTime?              @db.Timestamp(0)
+  users         users                  @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "fk_expert_requests_user")
+
+  @@index([status, created_at], map: "idx_expert_requests_status_created")
+  @@index([user_id], map: "idx_expert_requests_user")
+}
+
+model job_roles {
+  role_id          Int                @id @default(autoincrement())
+  title            String             @unique(map: "title") @db.VarChar(120)
+  user_job_history user_job_history[]
+}
+
+model ledger {
+  id         BigInt           @id @default(autoincrement())
+  user_id    Int
+  direction  ledger_direction
+  source     ledger_source
+  amount     Decimal          @db.Decimal(10, 2)
+  currency   String?          @default("USD") @db.Char(3)
+  ref_table  String?          @db.VarChar(30)
+  ref_id     BigInt?
+  created_at DateTime?        @default(now()) @db.DateTime(0)
+  users      users            @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "ledger_ibfk_1")
+
+  @@index([user_id, created_at], map: "idx_ledger_user")
+}
+
+model message_attachments {
+  id         BigInt   @id @default(autoincrement())
+  message_id BigInt
+  file_url   String   @db.VarChar(255)
+  file_type  String?  @db.VarChar(60)
+  size_bytes Int?
+  messages   messages @relation(fields: [message_id], references: [message_id], onDelete: Cascade, onUpdate: Restrict, map: "message_attachments_ibfk_1")
+
+  @@index([message_id], map: "message_id")
+}
+
+model messages {
+  message_id          BigInt                @id @default(autoincrement())
+  chat_id             Int
+  sender_id           Int
+  content             String?               @db.Text
+  has_attachment      Boolean?              @default(false)
+  is_urgent           Boolean?              @default(false)
+  created_at          DateTime?             @default(now()) @db.DateTime(0)
+  message_attachments message_attachments[]
+  chats               chats                 @relation(fields: [chat_id], references: [chat_id], onDelete: Cascade, onUpdate: Restrict, map: "messages_ibfk_1")
+  users               users                 @relation(fields: [sender_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "messages_ibfk_2")
+
+  @@index([chat_id, created_at], map: "idx_messages_chat_time")
+  @@index([sender_id], map: "sender_id")
+}
+
+model notifications {
+  notification_id Int      @id @default(autoincrement())
+  user_id         Int
+  title           String
+  body            String   @db.Text
+  is_read         Boolean  @default(false)
+  created_at      DateTime @default(now()) @db.Timestamp(0)
+  users           users    @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "fk_notifications_user")
+
+  @@index([user_id, is_read], map: "idx_notifications_unread")
+  @@index([user_id, created_at], map: "idx_notifications_user_created")
+}
+
+model password_reset_tokens {
+  id         BigInt    @id @default(autoincrement())
+  user_id    Int
+  token      String    @unique(map: "token") @db.Char(64)
+  expires_at DateTime  @db.DateTime(0)
+  created_at DateTime? @default(now()) @db.DateTime(0)
+  users      users     @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "password_reset_tokens_ibfk_1")
+
+  @@index([user_id], map: "user_id")
+}
+
+model payments {
+  payment_id                      BigInt           @id @default(autoincrement())
+  payer_id                        Int
+  expert_id                       Int
+  subscription_id                 Int?
+  amount                          Decimal          @db.Decimal(10, 2)
+  currency                        String?          @default("USD") @db.Char(3)
+  gateway                         String?          @db.VarChar(50)
+  gateway_txn_id                  String?          @db.VarChar(100)
+  status                          payments_status? @default(pending)
+  created_at                      DateTime?        @default(now()) @db.DateTime(0)
+  users_payments_payer_idTousers  users            @relation("payments_payer_idTousers", fields: [payer_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "payments_ibfk_1")
+  users_payments_expert_idTousers users            @relation("payments_expert_idTousers", fields: [expert_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "payments_ibfk_2")
+  subscriptions                   subscriptions?   @relation(fields: [subscription_id], references: [subscription_id], onUpdate: Restrict, map: "payments_ibfk_3")
+
+  @@index([expert_id, status], map: "idx_payments_expert")
+  @@index([payer_id, status], map: "idx_payments_payer")
+  @@index([subscription_id], map: "subscription_id")
+}
+
+model payouts {
+  payout_id   BigInt          @id @default(autoincrement())
+  expert_id   Int
+  amount      Decimal         @db.Decimal(10, 2)
+  currency    String?         @default("USD") @db.Char(3)
+  method      String?         @db.VarChar(50)
+  account_ref String?         @db.VarChar(120)
+  status      payouts_status? @default(pending)
+  created_at  DateTime?       @default(now()) @db.DateTime(0)
+  users       users           @relation(fields: [expert_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "payouts_ibfk_1")
+
+  @@index([expert_id], map: "expert_id")
+}
+
+model post_comments {
+  comment_id          Int             @id @default(autoincrement())
+  post_id             Int
+  user_id             Int
+  parent_comment_id   Int?
+  content             String          @db.Text
+  created_at          DateTime?       @default(now()) @db.DateTime(0)
+  posts               posts           @relation(fields: [post_id], references: [post_id], onDelete: Cascade, onUpdate: Restrict, map: "post_comments_ibfk_1")
+  users               users           @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "post_comments_ibfk_2")
+  post_comments       post_comments?  @relation("post_commentsTopost_comments", fields: [parent_comment_id], references: [comment_id], onDelete: Cascade, onUpdate: Restrict, map: "post_comments_ibfk_3")
+  other_post_comments post_comments[] @relation("post_commentsTopost_comments")
+
+  @@index([post_id, created_at], map: "idx_comments_post")
+  @@index([parent_comment_id], map: "parent_comment_id")
+  @@index([user_id], map: "user_id")
+}
+
+model post_tags {
+  post_id Int
+  tag     String @db.VarChar(50)
+  posts   posts  @relation(fields: [post_id], references: [post_id], onDelete: Cascade, onUpdate: Restrict, map: "post_tags_ibfk_1")
+
+  @@id([post_id, tag])
+}
+
+model post_votes {
+  user_id    Int
+  post_id    Int
+  value      Int       @db.TinyInt
+  created_at DateTime? @default(now()) @db.DateTime(0)
+  users      users     @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "post_votes_ibfk_1")
+  posts      posts     @relation(fields: [post_id], references: [post_id], onDelete: Cascade, onUpdate: Restrict, map: "post_votes_ibfk_2")
+
+  @@id([user_id, post_id])
+  @@index([post_id], map: "post_id")
+}
+
+model posts {
+  post_id         Int               @id @default(autoincrement())
+  expert_id       Int
+  title           String            @db.VarChar(255)
+  content         String            @db.MediumText
+  visibility      posts_visibility? @default(public)
+  price_unlock    Decimal?          @db.Decimal(10, 2)
+  created_at      DateTime?         @default(now()) @db.DateTime(0)
+  updated_at      DateTime?         @default(now()) @db.DateTime(0)
+  deleted_at      DateTime?         @db.DateTime(0)
+  post_comments   post_comments[]
+  post_tags       post_tags[]
+  post_votes      post_votes[]
+  expert_profiles expert_profiles   @relation(fields: [expert_id], references: [expert_id], onDelete: Cascade, onUpdate: Restrict, map: "posts_ibfk_1")
+
+  @@index([expert_id, visibility, created_at], map: "idx_posts_author_vis")
+  @@fulltext([title, content], map: "ftx_posts_search")
+}
+
+model profile_change_requests {
+  req_id        Int                             @id @default(autoincrement())
+  user_id       Int
+  payload       String                          @db.LongText
+  status        profile_change_requests_status? @default(pending)
+  admin_message String?                         @db.Text
+  created_at    DateTime?                       @default(now()) @db.DateTime(0)
+  reviewed_at   DateTime?                       @db.DateTime(0)
+  users         users                           @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "profile_change_requests_ibfk_1")
+
+  @@index([user_id], map: "user_id")
+}
+
+model ratings {
+  rating_id       Int             @id @default(autoincrement())
+  subscription_id Int             @unique(map: "subscription_id")
+  seeker_id       Int
+  expert_id       Int
+  rating_value    Int             @db.TinyInt
+  review          String?         @db.Text
+  created_at      DateTime?       @default(now()) @db.DateTime(0)
+  subscriptions   subscriptions   @relation(fields: [subscription_id], references: [subscription_id], onDelete: Cascade, onUpdate: Restrict, map: "ratings_ibfk_1")
+  users           users           @relation(fields: [seeker_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "ratings_ibfk_2")
+  expert_profiles expert_profiles @relation(fields: [expert_id], references: [expert_id], onDelete: Cascade, onUpdate: Restrict, map: "ratings_ibfk_3")
+
+  @@index([expert_id], map: "expert_id")
+  @@index([seeker_id], map: "seeker_id")
+}
+
+model reports {
+  report_id   Int                 @id @default(autoincrement())
+  reporter_id Int
+  target_type reports_target_type
+  target_id   BigInt
+  reason      String?             @db.VarChar(255)
+  details     String?             @db.Text
+  status      reports_status?     @default(open)
+  created_at  DateTime?           @default(now()) @db.DateTime(0)
+  users       users               @relation(fields: [reporter_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "reports_ibfk_1")
+
+  @@index([reporter_id], map: "reporter_id")
+}
+
+model search_queries {
+  id           BigInt    @id @default(autoincrement())
+  user_id      Int?
+  query        String    @db.Text
+  result_count Int?
+  created_at   DateTime? @default(now()) @db.DateTime(0)
+  users        users?    @relation(fields: [user_id], references: [user_id], onUpdate: Restrict, map: "search_queries_ibfk_1")
+
+  @@index([user_id], map: "user_id")
+}
+
+model skills {
+  skill_id       Int              @id @default(autoincrement())
+  skill_name     String           @unique(map: "skill_name") @db.VarChar(100)
+  user_interests user_interests[]
+  user_skills    user_skills[]
+}
+
+model subscriptions {
+  subscription_id                      Int                   @id @default(autoincrement())
+  seeker_id                            Int
+  expert_id                            Int
+  plan                                 subscriptions_plan?   @default(monthly)
+  start_at                             DateTime              @db.DateTime(0)
+  end_at                               DateTime?             @db.DateTime(0)
+  amount_paid                          Decimal               @db.Decimal(10, 2)
+  currency                             String?               @default("USD") @db.Char(3)
+  status                               subscriptions_status? @default(pending)
+  created_at                           DateTime?             @default(now()) @db.DateTime(0)
+  updated_at                           DateTime?             @default(now()) @db.DateTime(0)
+  chats                                chats[]
+  payments                             payments[]
+  ratings                              ratings?
+  users_subscriptions_seeker_idTousers users                 @relation("subscriptions_seeker_idTousers", fields: [seeker_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "subscriptions_ibfk_1")
+  users_subscriptions_expert_idTousers users                 @relation("subscriptions_expert_idTousers", fields: [expert_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "subscriptions_ibfk_2")
+
+  @@index([expert_id, status], map: "idx_subs_expert")
+  @@index([seeker_id, status], map: "idx_subs_seeker")
+}
+
+model user_badges {
+  user_id     Int
+  badge_id    Int
+  assigned_at DateTime? @default(now()) @db.DateTime(0)
+  users       users     @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "user_badges_ibfk_1")
+  badges      badges    @relation(fields: [badge_id], references: [badge_id], onDelete: Cascade, onUpdate: Restrict, map: "user_badges_ibfk_2")
+
+  @@id([user_id, badge_id])
+  @@index([badge_id], map: "badge_id")
+}
+
+model user_interests {
+  user_id  Int
+  skill_id Int
+  users    users  @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "user_interests_ibfk_1")
+  skills   skills @relation(fields: [skill_id], references: [skill_id], onDelete: Cascade, onUpdate: Restrict, map: "user_interests_ibfk_2")
+
+  @@id([user_id, skill_id])
+  @@index([skill_id], map: "skill_id")
+}
+
+model user_job_history {
+  id          Int       @id @default(autoincrement())
+  user_id     Int
+  company_id  Int
+  role_id     Int
+  start_date  DateTime? @db.Date
+  end_date    DateTime? @db.Date
+  description String?   @db.Text
+  created_at  DateTime? @default(now()) @db.DateTime(0)
+  users       users     @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "user_job_history_ibfk_1")
+  companies   companies @relation(fields: [company_id], references: [company_id], onDelete: Cascade, onUpdate: Restrict, map: "user_job_history_ibfk_2")
+  job_roles   job_roles @relation(fields: [role_id], references: [role_id], onUpdate: Restrict, map: "user_job_history_ibfk_3")
+
+  @@index([company_id], map: "idx_job_history_company")
+  @@index([user_id], map: "idx_job_history_user")
+  @@index([role_id], map: "role_id")
+}
+
+model user_skills {
+  user_id  Int
+  skill_id Int
+  level    user_skills_level? @default(advanced)
+  users    users              @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "user_skills_ibfk_1")
+  skills   skills             @relation(fields: [skill_id], references: [skill_id], onDelete: Cascade, onUpdate: Restrict, map: "user_skills_ibfk_2")
+
+  @@id([user_id, skill_id])
+  @@index([skill_id], map: "idx_user_skills_skill")
+}
+
+model users {
+  user_id                                      Int                         @id @default(autoincrement())
+  first_name                                   String                      @db.VarChar(80)
+  last_name                                    String                      @db.VarChar(80)
+  username                                     String                      @unique(map: "username") @db.VarChar(80)
+  name                                         String?                     @db.VarChar(160)
+  email                                        String                      @unique(map: "email") @db.VarChar(150)
+  password_hash                                String                      @db.VarChar(255)
+  company_id                                   Int?
+  profession                                   String?                     @db.VarChar(120)
+  avatar                                       String?                     @db.VarChar(255)
+  cover_photo                                  String?                     @db.VarChar(255)
+  bio                                          String?                     @db.Text
+  role                                         users_role?                 @default(user)
+  status                                       users_status?               @default(active)
+  email_verified                               Boolean?                    @default(false)
+  timezone                                     String?                     @db.VarChar(64)
+  created_at                                   DateTime?                   @default(now()) @db.DateTime(0)
+  updated_at                                   DateTime?                   @default(now()) @db.DateTime(0)
+  deleted_at                                   DateTime?                   @db.DateTime(0)
+  admin_log_admin_log_admin_idTousers          admin_log[]                 @relation("admin_log_admin_idTousers")
+  admin_log_admin_log_target_userTousers       admin_log[]                 @relation("admin_log_target_userTousers")
+  blocks_blocks_blocker_idTousers              blocks[]                    @relation("blocks_blocker_idTousers")
+  blocks_blocks_blocked_idTousers              blocks[]                    @relation("blocks_blocked_idTousers")
+  email_verification_tokens                    email_verification_tokens[]
+  expert_profiles                              expert_profiles?
+  expert_requests                              expert_requests[]
+  ledger                                       ledger[]
+  messages                                     messages[]
+  notifications                                notifications[]
+  password_reset_tokens                        password_reset_tokens[]
+  payments_payments_payer_idTousers            payments[]                  @relation("payments_payer_idTousers")
+  payments_payments_expert_idTousers           payments[]                  @relation("payments_expert_idTousers")
+  payouts                                      payouts[]
+  post_comments                                post_comments[]
+  post_votes                                   post_votes[]
+  profile_change_requests                      profile_change_requests[]
+  ratings                                      ratings[]
+  reports                                      reports[]
+  search_queries                               search_queries[]
+  subscriptions_subscriptions_seeker_idTousers subscriptions[]             @relation("subscriptions_seeker_idTousers")
+  subscriptions_subscriptions_expert_idTousers subscriptions[]             @relation("subscriptions_expert_idTousers")
+  user_badges                                  user_badges[]
+  user_interests                               user_interests[]
+  user_job_history                             user_job_history[]
+  user_skills                                  user_skills[]
+  companies                                    companies?                  @relation(fields: [company_id], references: [company_id], onUpdate: Restrict, map: "fk_users_company")
+
+  @@index([company_id], map: "idx_users_company")
+  @@fulltext([first_name, last_name, username, email, bio], map: "ftx_users_search")
+}
+
+enum expert_profiles_price_model {
+  monthly
+  per_chat
+  per_question
+}
+
+enum ledger_direction {
+  credit
+  debit
+}
+
+enum reports_target_type {
+  user
+  post
+  message
+}
+
+enum user_skills_level {
+  beginner
+  intermediate
+  advanced
+  expert
+}
+
+enum ledger_source {
+  payment
+  payout
+  refund
+  fee
+  adjustment
+}
+
+enum profile_change_requests_status {
+  pending
+  approved
+  rejected
+}
+
+enum subscriptions_plan {
+  monthly
+  per_chat
+  per_question
+}
+
+enum posts_visibility {
+  public
+  subscribers
+  paywalled
+}
+
+enum payouts_status {
+  pending
+  processing
+  paid
+  failed
+}
+
+enum reports_status {
+  open
+  reviewing
+  closed
+}
+
+enum expert_requests_status {
+  pending
+  approved
+  rejected
+}
+
+enum payments_status {
+  pending
+  succeeded
+  failed
+  refunded
+}
+
+enum subscriptions_status {
+  pending
+  active
+  expired
+  canceled
+  refunded
+}
+
+enum users_role {
+  user
+  admin
+}
+
+enum users_status {
+  active
+  blocked
+  deleted
+}
