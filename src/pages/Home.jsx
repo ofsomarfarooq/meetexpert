@@ -9,6 +9,27 @@ import TopExperts from "../components/TopExperts.jsx";
 import LatestPosts from "../components/LatestPosts.jsx";
 
 
+// Robust avatar resolver
+const avatarUrl = (val) => {
+  if (!val) return null;
+
+  // base API origin (fallback to localhost:5000 if VITE_API_BASE isn't set)
+  const base =
+    import.meta.env.VITE_API_BASE ||
+    (typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:5000` : "");
+
+  // already absolute
+  if (/^https?:\/\//i.test(val)) return val;
+
+  // starts with /uploads => prefix with API origin
+  if (val.startsWith("/")) return `${base}${val}`;
+
+  // bare filename => assume avatar file under /uploads/avatars
+  return `${base}/uploads/avatars/${val}`;
+};
+
+
+
 
 export default function Home() {
   const { token } = useAuth();
@@ -23,6 +44,9 @@ export default function Home() {
   const [visibility, setVisibility] = useState("public");
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState("");
+
+
+  const imgUrl = (u) => (u ? (u.startsWith("http") ? u : `${import.meta.env.VITE_API_BASE || ""}${u}`) : null);
 
   const loadPosts = async () => {
     try {
@@ -108,30 +132,33 @@ export default function Home() {
                 <div className="card-body">
                   {/* author */}
                   {p.author && (
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className="avatar placeholder">
-                        <div className="bg-neutral text-neutral-content w-8 rounded-full">
-                          <span className="text-xs">
-                            {(p.author.first_name?.[0] || p.author.username?.[0] || "U").toUpperCase()}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="text-sm">
-                        <div className="font-medium">
-                          {p.author.first_name} {p.author.last_name}
-                          <span className="opacity-60"> @{p.author.username}</span>
-                        </div>
-                        <div className="opacity-60 text-xs">
-                          {new Date(p.created_at).toLocaleString()}
-                          {p.visibility === "subscribers" && (
-                            <span className="ml-2 badge badge-outline badge-sm">
-                              Subscribers
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
+  <div className="flex items-center gap-3 mb-2">
+    <Link to={`/profile/${p.author.user_id}`} className="avatar">
+  <div className="w-8 rounded-full overflow-hidden">
+    {p.author.avatar ? (
+      <img src={avatarUrl(p.author.avatar)} alt={p.author.username || "avatar"} />
+    ) : (
+      <div className="bg-neutral text-neutral-content w-8 h-8 rounded-full flex items-center justify-center text-xs">
+        {(p.author.first_name?.[0] || p.author.username?.[0] || "U").toUpperCase()}
+      </div>
+    )}
+  </div>
+</Link>
+
+    <div className="text-sm">
+      <Link to={`/profile/${p.author.user_id}`} className="font-medium hover:underline">
+        {p.author.first_name} {p.author.last_name}
+      </Link>
+      <span className="opacity-60"> @{p.author.username}</span>
+      <div className="opacity-60 text-xs">
+        {new Date(p.created_at).toLocaleString()}
+        {p.visibility === "subscribers" && (
+          <span className="ml-2 badge badge-outline badge-sm">Subscribers</span>
+        )}
+      </div>
+    </div>
+  </div>
+)}
 
                   <h3 className="text-lg font-semibold">{p.title}</h3>
                   <p className="opacity-90 leading-relaxed whitespace-pre-wrap">
@@ -149,7 +176,7 @@ export default function Home() {
   {/* Top Experts */}
   <div className="card bg-base-100 shadow">
     <div className="card-body p-4">
-      <h2 className="card-title text-sm mb-3">🌟 Top Experts</h2>
+    
       <TopExperts />
     </div>
   </div>

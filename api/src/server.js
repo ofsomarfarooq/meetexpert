@@ -67,39 +67,89 @@ const notify = async ({ user_id, title, body }) => {
 /* ----------------------------------
    File uploads (local)
 ---------------------------------- */
-const UPLOAD_DIR = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR);
-app.use("/uploads", express.static(UPLOAD_DIR));
+/* ----------------------------------
+   File uploads (local)
+---------------------------------- */
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname || "");
-    const base = path.basename(file.originalname || "file", ext).replace(/[^\w.-]/g, "_").slice(0, 40);
-    cb(null, `${Date.now()}_${base}${ext}`);
-  }
-});
-const upload = multer({
-  storage,
-  limits: { fileSize: 8 * 1024 * 1024 },
+
+const UPLOAD_ROOT = path.join(process.cwd(), "uploads");
+const AVATAR_DIR = path.join(UPLOAD_ROOT, "avatars");
+const COVER_DIR  = path.join(UPLOAD_ROOT, "covers");
+const PROOFS_DIR = path.join(UPLOAD_ROOT, "proofs");
+
+// ensure folders exist
+for (const dir of [UPLOAD_ROOT, AVATAR_DIR, COVER_DIR, PROOFS_DIR]) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+// serve uploads statically
+app.use("/uploads", express.static(UPLOAD_ROOT));
+
+const filenameGen = (req, file, cb) => {
+  const ext = path.extname(file.originalname || "").toLowerCase();
+  cb(null, `${req.user?.user_id || "anon"}_${Date.now()}${ext}`);
+};
+
+// One uploader per destination (don’t rely on fieldname)
+const avatarUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, AVATAR_DIR),
+    filename: filenameGen
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    const ok = /image\/(png|jpe?g|webp|gif)/i.test(file.mimetype);
-    cb(ok ? null : new Error("Only image files allowed"), ok);
+    const ok = ["image/png", "image/jpeg", "image/jpg", "image/webp"].includes(file.mimetype);
+    cb(ok ? null : new Error("Only PNG/JPG/WEBP images allowed"), ok);
   }
 });
 
-// Single image (avatar/cover)
-app.post("/api/upload", auth, upload.single("file"), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "file required" });
-  res.json({ url: `/uploads/${req.file.filename}` });
+const coverUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, COVER_DIR),
+    filename: filenameGen
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok = ["image/png", "image/jpeg", "image/jpg", "image/webp"].includes(file.mimetype);
+    cb(ok ? null : new Error("Only PNG/JPG/WEBP images allowed"), ok);
+  }
 });
 
-// Multiple images (proof files)
-app.post("/api/uploads/proofs", auth, upload.array("files", 8), (req, res) => {
-  const urls = (req.files || []).map(f => `/uploads/${f.filename}`);
-  if (!urls.length) return res.status(400).json({ error: "files required" });
-  res.json({ urls });
+const proofsUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, PROOFS_DIR),
+    filename: filenameGen
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 }, // allow a bit bigger
+  fileFilter: (_req, file, cb) => {
+    const ok = ["image/png", "image/jpeg", "image/jpg", "image/webp", "application/pdf"].includes(file.mimetype);
+    cb(ok ? null : new Error("Only PNG/JPG/WEBP/PDF allowed"), ok);
+  }
 });
+
+// avatar -> /uploads/avatars/xxx
+app.post("/api/upload/avatar", auth, avatarUpload.single("file"), asyncRoute(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+  const url = `/uploads/avatars/${req.file.filename}`;
+  await prisma.users.update({ where: { user_id: req.user.user_id }, data: { avatar: url } });
+  res.json({ ok: true, url });
+}));
+
+// cover -> /uploads/covers/xxx
+app.post("/api/upload/cover", auth, coverUpload.single("file"), asyncRoute(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+  const url = `/uploads/covers/${req.file.filename}`;
+  await prisma.users.update({ where: { user_id: req.user.user_id }, data: { cover_photo: url } });
+  res.json({ ok: true, url });
+}));
+
+// multiple proof files -> /uploads/proofs/xxx
+app.post("/api/uploads/proofs", auth, proofsUpload.array("files"), asyncRoute(async (req, res) => {
+  if (!req.files?.length) return res.status(400).json({ error: "No files uploaded" });
+  const urls = req.files.map(f => `/uploads/proofs/${f.filename}`);
+  res.json({ ok: true, urls });
+}));
+
 
 /* ----------------------------------
    Health
@@ -255,95 +305,169 @@ app.post("/api/ratings", auth, asyncRoute(async (req, res) => {
   res.json({ ok: true, rating: ratingRecord });
 }));
 
+// GET /api/experts/:id/ratings
 app.get("/api/experts/:id/ratings", asyncRoute(async (req, res) => {
   const expert_id = Number(req.params.id);
+
   const list = await prisma.ratings.findMany({
     where: { expert_id },
     orderBy: { created_at: "desc" },
-    select: { rating_id: true, rating_value: true, review: true, created_at: true, seeker_id: true }
+    select: {
+      rating_id: true,
+      rating_value: true,
+      review: true,
+      created_at: true,
+      seeker_id: true
+    }
   });
+
   const seekerIds = [...new Set(list.map(r => r.seeker_id))];
   const seekers = seekerIds.length
-    ? await prisma.users.findMany({ where: { user_id: { in: seekerIds } }, select: { user_id: true, username: true, first_name: true, last_name: true, avatar: true } })
+    ? await prisma.users.findMany({
+        where: { user_id: { in: seekerIds } },
+        select: { user_id: true, username: true, first_name: true, last_name: true, avatar: true }
+      })
     : [];
   const map = new Map(seekers.map(s => [s.user_id, s]));
-  const withUsers = list.map(r => ({ ...r, seeker: map.get(r.seeker_id) }));
-  const agg = await prisma.ratings.aggregate({ _avg: { rating_value: true }, _count: { rating_id: true }, where: { expert_id } });
-  res.json({ avg: Number(agg._avg.rating_value?.toFixed(2) || 0), total: agg._count.rating_id || 0, items: withUsers });
+  const withUsers = list.map(r => ({
+    ...r,
+    rating_id: Number(r.rating_id),
+    rating_value: Number(r.rating_value ?? 0),
+    seeker: map.get(r.seeker_id)
+  }));
+
+  const agg = await prisma.ratings.aggregate({
+    _avg: { rating_value: true },
+    _count: { rating_id: true },
+    where: { expert_id }
+  });
+
+  const avg = Number(agg._avg.rating_value ?? 0);
+  const total = Number(agg._count.rating_id ?? 0);
+
+  res.json({
+    avg: Number.isFinite(avg) ? Number(avg.toFixed(2)) : 0,
+    total,
+    items: withUsers
+  });
 }));
+
 
 // Expert public profile
+// GET /api/experts/:id
 app.get("/api/experts/:id", asyncRoute(async (req, res) => {
   const expert_id = Number(req.params.id);
+
   const user = await prisma.users.findUnique({
     where: { user_id: expert_id },
-    select: { user_id: true, username: true, first_name: true, last_name: true, avatar: true, cover_photo: true, bio: true, profession: true }
+    select: {
+      user_id: true, username: true, first_name: true, last_name: true,
+      avatar: true, cover_photo: true, bio: true, profession: true
+    }
   });
+
   const expert = await prisma.expert_profiles.findUnique({
     where: { expert_id },
-    select: { price_model: true, price_amount: true, currency: true, overall_rating: true, is_verified: true }
+    select: {
+      price_model: true,
+      price_amount: true,
+      currency: true,
+      overall_rating: true,
+      is_verified: true
+    }
   });
+
   if (!user || !expert) return res.status(404).json({ error: "Expert not found" });
 
-  const agg = await prisma.ratings.aggregate({ _avg: { rating_value: true }, _count: { rating_id: true }, where: { expert_id } });
+  const agg = await prisma.ratings.aggregate({
+    _avg: { rating_value: true },
+    _count: { rating_id: true },
+    where: { expert_id }
+  });
+
   res.json({
-    ...user, ...expert,
-    rating: { avg: Number(agg._avg.rating_value?.toFixed(2) || 0), total: agg._count.rating_id || 0 }
+    ...user,
+    price_model: expert.price_model,
+    price_amount: Number(expert.price_amount ?? 0),
+    currency: expert.currency,
+    overall_rating: Number(expert.overall_rating ?? 0),
+    is_verified: !!expert.is_verified,
+    rating: {
+      avg: Number((agg._avg.rating_value ?? 0).toFixed?.(2) ?? 0),
+      total: Number(agg._count.rating_id ?? 0)
+    }
   });
 }));
 
-// Experts listing
+
+// GET /api/experts
 app.get("/api/experts", asyncRoute(async (req, res) => {
-  const q = (req.query.q || "").trim();
+  const q        = (req.query.q || "").trim();
   const minPrice = req.query.minPrice ? Number(req.query.minPrice) : null;
   const maxPrice = req.query.maxPrice ? Number(req.query.maxPrice) : null;
-  const sort = (req.query.sort || "rating_desc").toString();
-  const page = Math.max(1, Number(req.query.page || 1));
-  const limit = Math.min(50, Math.max(1, Number(req.query.limit || 10)));
-  const skip = (page - 1) * limit;
+  const sort     = (req.query.sort || "rating_desc").toString();
+  const page     = Math.max(1, Number(req.query.page || 1));
+  const limit    = Math.min(50, Math.max(1, Number(req.query.limit || 10)));
+  const skip     = (page - 1) * limit;
 
   const whereUser = {
     status: "active",
-    ...(q ? { OR: [
-      { first_name: { contains: q } },
-      { last_name: { contains: q } },
-      { username: { contains: q } },
-      { profession: { contains: q } }
-    ] } : {})
+    ...(q ? {
+      OR: [
+        { first_name: { contains: q } },
+        { last_name:  { contains: q } },
+        { username:   { contains: q } },
+        { profession: { contains: q } },
+      ]
+    } : {})
   };
+
   const whereExpert = {
     ...(minPrice !== null ? { price_amount: { gte: minPrice } } : {}),
-    ...(maxPrice !== null ? { price_amount: { lte: maxPrice } } : {})
+    ...(maxPrice !== null ? { price_amount: { lte: maxPrice } } : {}),
   };
+
   const orderBy =
-    sort === "price_asc"  ? [{ price_amount: "asc" }] :
+    sort === "price_asc"  ? [{ price_amount: "asc" }]  :
     sort === "price_desc" ? [{ price_amount: "desc" }] :
     sort === "rating_asc" ? [{ overall_rating: "asc" }] :
                             [{ overall_rating: "desc" }];
 
-  const total = await prisma.expert_profiles.count({ where: { ...whereExpert, users: { ...whereUser } } });
+  const total = await prisma.expert_profiles.count({
+    where: { ...whereExpert, users: { ...whereUser } }
+  });
+
   const experts = await prisma.expert_profiles.findMany({
     where: { ...whereExpert, users: { ...whereUser } },
     orderBy, skip, take: limit,
     select: {
-      expert_id: true, price_model: true, price_amount: true, currency: true, overall_rating: true, is_verified: true,
-      users: { select: { user_id: true, username: true, first_name: true, last_name: true, avatar: true, profession: true } }
+      expert_id: true,
+      price_model: true,
+      price_amount: true,
+      currency: true,
+      overall_rating: true,
+      is_verified: true,
+      users: {
+        select: {
+          user_id: true, username: true, first_name: true, last_name: true, avatar: true, profession: true
+        }
+      }
     }
   });
 
-  res.json(toSafe({
-    page, limit, total,
-    items: experts.map(e => ({
-      expert_id: e.expert_id,
-      price_model: e.price_model,
-      price_amount: e.price_amount,
-      currency: e.currency,
-      overall_rating: e.overall_rating,
-      is_verified: e.is_verified,
-      user: e.users
-    }))
+  const items = experts.map(e => ({
+    expert_id: Number(e.expert_id),
+    price_model: e.price_model,
+    price_amount: Number(e.price_amount ?? 0),
+    currency: e.currency,
+    overall_rating: Number(e.overall_rating ?? 0),
+    is_verified: !!e.is_verified,
+    user: e.users
   }));
+
+  res.json({ page, limit, total, items });
 }));
+
 
 /* ----------------------------------
    Subscriptions & Chats
