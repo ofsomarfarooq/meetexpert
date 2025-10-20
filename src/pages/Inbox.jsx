@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+// src/pages/Inbox.jsx
+import { useEffect, useState, useMemo } from "react";
 import http from "../api/http";
 import { useAuth } from "../store/auth";
 import Navbar from "../components/Navbar.jsx";
@@ -13,6 +14,17 @@ export default function Inbox() {
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [sending, setSending] = useState(false);
 
+  // Build absolute URL for avatars stored like "/uploads/avatars/xxx.jpg"
+  const API_ORIGIN = useMemo(() => {
+    try {
+      return new URL(http.defaults.baseURL).origin;
+    } catch {
+      return "http://localhost:5000";
+    }
+  }, []);
+  const toUrl = (p) =>
+    !p ? "" : p.startsWith("http") ? p : `${API_ORIGIN}${p}`;
+
   // load chats once
   useEffect(() => {
     const load = async () => {
@@ -22,7 +34,6 @@ export default function Inbox() {
           headers: { Authorization: `Bearer ${token}` },
         });
         setChats(data || []);
-        // auto-select first chat if none selected
         if (!activeChat && data?.length) setActiveChat(data[0]);
       } catch (e) {
         console.error("Failed to load chats", e);
@@ -32,6 +43,7 @@ export default function Inbox() {
       }
     };
     if (token) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   // load messages when activeChat changes
@@ -40,11 +52,11 @@ export default function Inbox() {
       if (!activeChat) return;
       setLoadingMsgs(true);
       try {
-        const { data } = await http.get(`/chats/${activeChat.chat_id}/messages`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const { data } = await http.get(
+          `/chats/${activeChat.chat_id}/messages`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
         setMessages(data || []);
-        // scroll to bottom next tick
         setTimeout(() => {
           const el = document.getElementById("msg-end");
           el?.scrollIntoView({ behavior: "smooth" });
@@ -81,17 +93,13 @@ export default function Inbox() {
         { content: temp.content },
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      // replace optimistic with real one
-      setMessages((m) =>
-        m.map((x) => (x._optimistic ? { ...data } : x))
-      );
+      setMessages((m) => m.map((x) => (x._optimistic ? { ...data } : x)));
       setTimeout(() => {
         const el = document.getElementById("msg-end");
         el?.scrollIntoView({ behavior: "smooth" });
       }, 0);
     } catch (e) {
       console.error("Send failed", e);
-      // revert optimistic
       setMessages((m) => m.filter((x) => !x._optimistic));
       alert(e?.response?.data?.error || "Failed to send");
     } finally {
@@ -108,31 +116,45 @@ export default function Inbox() {
           <div className="card bg-base-200">
             <div className="card-body">
               <h2 className="card-title">Chats</h2>
-              {loadingChats && <div className="text-sm opacity-70">Loading chats…</div>}
+              {loadingChats && (
+                <div className="text-sm opacity-70">Loading chats…</div>
+              )}
               {!loadingChats && chats.length === 0 && <div>No chats yet</div>}
               <ul className="menu">
-                {chats.map((c) => (
-                  <li key={c.chat_id}>
-                    <button
-                      className={activeChat?.chat_id === c.chat_id ? "active" : ""}
-                      onClick={() => setActiveChat(c)}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="avatar placeholder">
-                          <div className="bg-neutral text-neutral-content rounded-full w-8">
-                            <span>{(c.peer?.first_name?.[0] || c.peer?.username?.[0] || "?").toUpperCase()}</span>
+                {chats.map((c) => {
+                  const name =
+                    c.peer?.first_name
+                      ? `${c.peer.first_name} ${
+                          c.peer.last_name || ""
+                        }`.trim()
+                      : c.peer?.username;
+                  const avatarSrc =
+                    toUrl(c.peer?.avatar) || "https://i.pravatar.cc/64?u=me";
+                  return (
+                    <li key={c.chat_id}>
+                      <button
+                        className={
+                          activeChat?.chat_id === c.chat_id ? "active" : ""
+                        }
+                        onClick={() => setActiveChat(c)}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="avatar">
+                            <div className="w-8 rounded-full ring ring-base-300 ring-offset-2">
+                              <img src={avatarSrc} alt={name} />
+                            </div>
+                          </div>
+                          <div className="text-left">
+                            <div className="font-medium">{name}</div>
+                            <div className="text-xs opacity-70">
+                              #{c.chat_id}
+                            </div>
                           </div>
                         </div>
-                        <div className="text-left">
-                          <div className="font-medium">
-                            {c.peer?.first_name ? `${c.peer.first_name} ${c.peer.last_name || ""}`.trim() : c.peer?.username}
-                          </div>
-                          <div className="text-xs opacity-70">#{c.chat_id}</div>
-                        </div>
-                      </div>
-                    </button>
-                  </li>
-                ))}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           </div>
@@ -143,14 +165,31 @@ export default function Inbox() {
           {activeChat ? (
             <div className="card bg-base-200 h-[70vh] flex">
               <div className="card-body overflow-y-auto flex-1">
-                <h2 className="card-title mb-2">
-                  Chat with{" "}
-                  {activeChat.peer?.first_name
-                    ? `${activeChat.peer.first_name} ${activeChat.peer.last_name || ""}`.trim()
-                    : activeChat.peer?.username}
-                </h2>
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="avatar">
+                    <div className="w-8 rounded-full">
+                      <img
+                        src={
+                          toUrl(activeChat.peer?.avatar) ||
+                          "https://i.pravatar.cc/64?u=peer"
+                        }
+                        alt={activeChat.peer?.username || "peer"}
+                      />
+                    </div>
+                  </div>
+                  <h2 className="card-title">
+                    Chat with{" "}
+                    {activeChat.peer?.first_name
+                      ? `${activeChat.peer.first_name} ${
+                          activeChat.peer.last_name || ""
+                        }`.trim()
+                      : activeChat.peer?.username}
+                  </h2>
+                </div>
 
-                {loadingMsgs && <div className="opacity-70 text-sm">Loading messages…</div>}
+                {loadingMsgs && (
+                  <div className="opacity-70 text-sm">Loading messages…</div>
+                )}
 
                 <div className="flex flex-col gap-3">
                   {messages.map((m) => {
@@ -160,13 +199,31 @@ export default function Inbox() {
                         key={m.message_id}
                         className={`chat ${mine ? "chat-end" : "chat-start"}`}
                       >
+                        <div className="chat-image avatar">
+                          <div className="w-8 rounded-full">
+                            <img
+                              src={
+                                mine
+                                  ? toUrl(user?.avatar) ||
+                                    "https://i.pravatar.cc/64?u=me"
+                                  : toUrl(activeChat.peer?.avatar) ||
+                                    "https://i.pravatar.cc/64?u=peer"
+                              }
+                              alt={mine ? "You" : "Peer"}
+                            />
+                          </div>
+                        </div>
                         <div className="chat-header">
                           {mine ? "You" : activeChat.peer?.username}
                           <time className="text-xs opacity-50 ml-2">
                             {new Date(m.created_at).toLocaleString()}
                           </time>
                         </div>
-                        <div className={`chat-bubble ${mine ? "chat-bubble-primary" : ""}`}>
+                        <div
+                          className={`chat-bubble ${
+                            mine ? "chat-bubble-primary" : ""
+                          }`}
+                        >
                           {m.content}
                         </div>
                       </div>
@@ -176,14 +233,20 @@ export default function Inbox() {
                 </div>
               </div>
 
-              <form onSubmit={sendMessage} className="p-3 border-t bg-base-100 flex gap-2">
+              <form
+                onSubmit={sendMessage}
+                className="p-3 border-t bg-base-100 flex gap-2"
+              >
                 <input
                   className="input input-bordered flex-1"
                   placeholder="Type a message…"
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                 />
-                <button className="btn btn-primary" disabled={sending || !draft.trim()}>
+                <button
+                  className="btn btn-primary"
+                  disabled={sending || !draft.trim()}
+                >
                   {sending ? "Sending…" : "Send"}
                 </button>
               </form>

@@ -2,27 +2,31 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import PromptModal from "../../components/PromptModal.jsx";
-import { getExpertRequests, decideExpertRequest } from "../../api/admin.js";
+import http from "../../api/http";
 
 export default function AdminExpertRequests() {
-  const [status, setStatus] = useState("pending"); // "pending" | "approved" | "rejected"
+  const [status, setStatus] = useState("pending"); // pending | approved | rejected
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
-  // view details modal
   const [viewRow, setViewRow] = useState(null);
 
-  // confirm (approve/reject) modal
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null); // "approved" | "rejected"
-  const [selected, setSelected] = useState(null);           // current row object
+  const [selected, setSelected] = useState(null);
+
+  // pricing inputs (used only when approving)
+  const [priceModel, setPriceModel] = useState("per_chat");
+  const [priceAmount, setPriceAmount] = useState("5");
 
   const load = async () => {
     setLoading(true);
     setErr("");
     try {
-      const { data } = await getExpertRequests(status);
+      const { data } = await http.get("/admin/expert-requests", {
+        params: { status },
+      });
       setRows(data || []);
     } catch (e) {
       setErr(e.response?.data?.error || "Failed to load requests");
@@ -38,18 +42,34 @@ export default function AdminExpertRequests() {
 
   const openConfirm = (row, action) => {
     setSelected(row);
-    setConfirmAction(action); // "approved" | "rejected"
+    setConfirmAction(action);
+    if (action === "approved") {
+      setPriceModel("per_chat");
+      setPriceAmount("5");
+    }
     setConfirmOpen(true);
   };
 
-  // Modal -> returns only the admin message string
   const onSubmitDecision = async (adminMessage) => {
+    if (!selected || !confirmAction) return;
+
     try {
-      await decideExpertRequest(
-        selected.request_id,     // IMPORTANT: use request_id
-        confirmAction,           // "approved" | "rejected"
-        adminMessage || ""
+      const body =
+        confirmAction === "approved"
+          ? {
+              decision: "approved",
+              message: adminMessage || "",
+              // optional pricing — server will default if columns don’t exist
+              price_model: priceModel,
+              price_amount: Number(priceAmount || 0),
+            }
+          : { decision: "rejected", message: adminMessage || "" };
+
+      await http.patch(
+        `/admin/expert-requests/${selected.request_id}/decision`,
+        body
       );
+
       setConfirmOpen(false);
       setSelected(null);
       setConfirmAction(null);
@@ -65,19 +85,25 @@ export default function AdminExpertRequests() {
         <h1 className="text-2xl font-bold">Become Expert Requests</h1>
         <div className="join">
           <button
-            className={`btn btn-sm join-item ${status === "pending" ? "btn-primary" : ""}`}
+            className={`btn btn-sm join-item ${
+              status === "pending" ? "btn-primary" : ""
+            }`}
             onClick={() => setStatus("pending")}
           >
             Pending
           </button>
           <button
-            className={`btn btn-sm join-item ${status === "approved" ? "btn-primary" : ""}`}
+            className={`btn btn-sm join-item ${
+              status === "approved" ? "btn-primary" : ""
+            }`}
             onClick={() => setStatus("approved")}
           >
             Approved
           </button>
           <button
-            className={`btn btn-sm join-item ${status === "rejected" ? "btn-primary" : ""}`}
+            className={`btn btn-sm join-item ${
+              status === "rejected" ? "btn-primary" : ""
+            }`}
             onClick={() => setStatus("rejected")}
           >
             Rejected
@@ -134,12 +160,13 @@ export default function AdminExpertRequests() {
                     {r.company || "—"} {r.position ? `• ${r.position}` : ""}
                   </td>
                   <td>{new Date(r.created_at).toLocaleString()}</td>
-                  <td>{r.reviewed_at ? new Date(r.reviewed_at).toLocaleString() : "—"}</td>
+                  <td>
+                    {r.reviewed_at
+                      ? new Date(r.reviewed_at).toLocaleString()
+                      : "—"}
+                  </td>
                   <td className="space-x-2">
-                    <button
-                      className="btn btn-sm"
-                      onClick={() => setViewRow(r)}
-                    >
+                    <button className="btn btn-sm" onClick={() => setViewRow(r)}>
                       View
                     </button>
 
@@ -182,17 +209,20 @@ export default function AdminExpertRequests() {
         </div>
       )}
 
-      {/* View details modal */}
+      {/* View modal */}
       {viewRow && (
         <dialog open className="modal">
           <div className="modal-box max-w-2xl">
-            <h3 className="font-bold text-lg mb-4">Request #{viewRow.request_id}</h3>
+            <h3 className="font-bold text-lg mb-4">
+              Request #{viewRow.request_id}
+            </h3>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
                 <div className="text-sm opacity-70">User</div>
                 <div className="font-medium">
-                  {viewRow.users?.first_name} {viewRow.users?.last_name} (@{viewRow.users?.username})
+                  {viewRow.users?.first_name} {viewRow.users?.last_name} (@
+                  {viewRow.users?.username})
                 </div>
               </div>
               <div>
@@ -231,15 +261,15 @@ export default function AdminExpertRequests() {
             </div>
 
             <div className="modal-action">
-              <button className="btn" onClick={() => setViewRow(null)}>Close</button>
+              <button className="btn" onClick={() => setViewRow(null)}>
+                Close
+              </button>
               {viewRow.status === "pending" && (
                 <>
                   <button
                     className="btn btn-success"
                     onClick={() => {
-                      setConfirmAction("approved");
-                      setSelected(viewRow);
-                      setConfirmOpen(true);
+                      openConfirm(viewRow, "approved");
                       setViewRow(null);
                     }}
                   >
@@ -248,9 +278,7 @@ export default function AdminExpertRequests() {
                   <button
                     className="btn btn-error"
                     onClick={() => {
-                      setConfirmAction("rejected");
-                      setSelected(viewRow);
-                      setConfirmOpen(true);
+                      openConfirm(viewRow, "rejected");
                       setViewRow(null);
                     }}
                   >
@@ -260,20 +288,52 @@ export default function AdminExpertRequests() {
               )}
             </div>
           </div>
-          <form method="dialog" className="modal-backdrop" onClick={() => setViewRow(null)}>
+          <form
+            method="dialog"
+            className="modal-backdrop"
+            onClick={() => setViewRow(null)}
+          >
             <button>close</button>
           </form>
         </dialog>
       )}
 
-      {/* Confirm modal (message only) */}
+      {/* Confirm modal */}
       {confirmOpen && (
         <PromptModal
           title={`Confirm ${confirmAction}`}
           confirmText={confirmAction === "approved" ? "Approve" : "Reject"}
           onClose={() => setConfirmOpen(false)}
-          onSubmit={onSubmitDecision} // receives (message)
-        />
+          onSubmit={onSubmitDecision}
+        >
+          {confirmAction === "approved" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
+              <div>
+                <div className="text-sm mb-1">Price model</div>
+                <select
+                  className="select select-bordered w-full"
+                  value={priceModel}
+                  onChange={(e) => setPriceModel(e.target.value)}
+                >
+                  <option value="per_chat">per_chat</option>
+                  <option value="monthly">monthly</option>
+                  <option value="per_question">per_question</option>
+                </select>
+              </div>
+              <div>
+                <div className="text-sm mb-1">Price amount (USD)</div>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  className="input input-bordered w-full"
+                  value={priceAmount}
+                  onChange={(e) => setPriceAmount(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+        </PromptModal>
       )}
     </div>
   );

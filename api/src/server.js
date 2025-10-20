@@ -10,6 +10,18 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 
+import { bkashCreate, bkashExecute } from "./bkash/sdk.js";
+import { bkashCfg } from "./bkash/config.js";
+
+
+import { Prisma } from "@prisma/client";
+
+
+
+
+// import asyncRoute from "./lib/asyncRoute.js"; 
+
+
 dotenv.config();
 const app = express();
 const prisma = new PrismaClient();
@@ -27,6 +39,14 @@ app.use(cookieParser());
 /* ----------------------------------
    Helpers
 ---------------------------------- */
+
+function hasField(model, field) {
+  return Boolean(prisma._runtimeData?.clientVersion) // prisma >=5/6 guard
+    ? !!(prisma[model]?.fields?.find?.(f => f.name === field))
+    : true; // if unknown Prisma internals, assume true (no crash)
+}
+
+
 const toSafe = (v) => {
   if (typeof v === "bigint") return Number(v);
   if (v instanceof Date) return v.toISOString();
@@ -36,7 +56,8 @@ const toSafe = (v) => {
   }
   return v;
 };
-const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+const asyncRoute = (fn) => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
 
 const auth = (req, res, next) => {
   const header = req.headers.authorization || "";
@@ -304,6 +325,31 @@ app.post("/api/ratings", auth, asyncRoute(async (req, res) => {
 
   res.json({ ok: true, rating: ratingRecord });
 }));
+
+
+// GET /api/experts/:id/details
+app.get("/api/experts/:id/details", asyncRoute(async (req, res) => {
+  const expert_id = Number(req.params.id);
+
+  const user = await prisma.users.findUnique({
+    where: { user_id: expert_id },
+    select: { user_id: true, username: true, first_name: true, last_name: true, avatar: true, profession: true }
+  });
+
+  const ep = await prisma.expert_profiles.findUnique({
+    where: { expert_id },
+    select: {
+      price_model: true, price_amount: true, currency: true, is_verified: true,
+      company: true, position: true, primary_skill: true, description: true, proof_urls: true, overall_rating: true
+    }
+  });
+
+  if (!user || !ep) return res.status(404).json({ error: "Expert not found" });
+
+  res.json({ user, details: ep });
+}));
+
+
 
 // GET /api/experts/:id/ratings
 app.get("/api/experts/:id/ratings", asyncRoute(async (req, res) => {
@@ -586,6 +632,155 @@ app.post("/api/chats/open", auth, asyncRoute(async (req, res) => {
   res.json({ chat });
 }));
 
+
+app.get("/api/subscriptions/status/:expertId", auth, asyncRoute(async (req, res) => {
+  const seeker_id = req.user.user_id;
+  const expert_id = Number(req.params.expertId);
+
+  // active == status 'active' and (end_at is null OR end_at > now)
+  const active = await prisma.subscriptions.findFirst({
+    where: {
+      seeker_id, expert_id,
+      status: "active",
+      OR: [{ end_at: null }, { end_at: { gt: new Date() } }]
+    },
+    select: { subscription_id: true, end_at: true, status: true }
+  });
+
+  res.json({
+    canSubscribe: !active,
+    activeUntil: active?.end_at || null
+  });
+}));
+
+
+
+app.post("/api/subscriptions/:expertId", auth, asyncRoute(async (req, res) => {
+  const seeker_id = req.user.user_id;
+  const expert_id = Number(req.params.expertId);
+
+  // 1) pull expert pricing
+  const expert = await prisma.expert_profiles.findUnique({
+    where: { expert_id },
+    select: { price_model: true, price_amount: true, currency: true, is_verified: true }
+  });
+  if (!expert) return res.status(404).json({ error: "Expert not found" });
+  const amount = Number(expert.price_amount || 0);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return res.status(400).json({ error: "Expert is not purchasable" });
+  }
+
+  // 2) ensure no active sub exists already
+  const existing = await prisma.subscriptions.findFirst({
+    where: {
+      seeker_id, expert_id,
+      status: "active",
+      OR: [{ end_at: null }, { end_at: { gt: new Date() } }]
+    },
+    select: { subscription_id: true, end_at: true }
+  });
+  if (existing) {
+    return res.status(400).json({ error: "You already have an active subscription with this expert" });
+  }
+
+  // 3) check balance
+  const me = await prisma.users.findUnique({
+    where: { user_id: seeker_id },
+    select: { wallet: true }
+  });
+  const balance = Number(me?.wallet || 0);
+  if (balance < amount) {
+    return res.status(402).json({ error: "Insufficient wallet balance" }); // front-end will redirect to /wallet
+  }
+
+  // 4) create everything atomically
+  const now = new Date();
+  const endAt = expert.price_model === "monthly"
+    ? new Date(now.getTime() + 30 * 24 * 3600 * 1000)
+    : null; // for per_chat / per_question we keep it open-ended but still 'active'
+
+  const result = await prisma.$transaction(async (tx) => {
+    // 4a) debit wallet + ledger row
+    await tx.users.update({
+      where: { user_id: seeker_id },
+      data: { wallet: { decrement: amount } }
+    });
+
+    const wtx = await tx.wallet_transactions.create({
+      data: {
+        user_id: seeker_id,
+        amount,
+        kind: "debit",
+        method: "wallet",
+        reference: null,
+        note: `subscription:${expert_id}`,
+        status: "success"
+      },
+      select: { tx_id: true }
+    });
+
+    // 4b) subscription
+    const sub = await tx.subscriptions.create({
+      data: {
+        seeker_id,
+        expert_id,
+        plan: expert.price_model, // 'monthly' | 'per_chat' | 'per_question'
+        start_at: now,
+        end_at: endAt,
+        amount_paid: amount,
+        currency: expert.currency || "USD",
+        status: "active"
+      },
+      select: { subscription_id: true }
+    });
+
+    // 4c) optional: payments table row for admin accounting
+    await tx.payments.create({
+      data: {
+        payer_id: seeker_id,
+        expert_id,
+        subscription_id: sub.subscription_id,
+        amount,
+        currency: expert.currency || "USD",
+        gateway: "wallet",
+        gateway_txn_id: String(wtx.tx_id),
+        status: "succeeded"
+      }
+    });
+
+    // 4d) create chat bound to subscription (so Inbox opens)
+    await tx.chats.create({
+      data: { subscription_id: sub.subscription_id }
+    });
+
+    // 4e) notify expert + seeker (optional)
+    await tx.notifications.create({
+      data: {
+        user_id: expert_id,
+        title: "New subscriber",
+        body: "You have a new subscriber via wallet."
+      }
+    });
+    await tx.notifications.create({
+      data: {
+        user_id: seeker_id,
+        title: "Subscription active",
+        body: "Your subscription is now active. Check your Inbox to chat."
+      }
+    });
+
+    return {
+      subscription_id: sub.subscription_id,
+      tx_id: wtx.tx_id,
+      end_at: endAt
+    };
+  });
+
+  res.json({ ok: true, ...result });
+}));
+
+
+
 /* ----------------------------------
    Search + public user
 ---------------------------------- */
@@ -632,96 +827,202 @@ app.post("/api/skills", auth, asyncRoute(async (req, res) => {
   res.json(row);
 }));
 
-/* ----------------------------------
-   Expert Requests (user + admin)
----------------------------------- */
-// create request
+// ========================
+// Become Expert Request
+// ========================
 app.post("/api/expert-requests", auth, asyncRoute(async (req, res) => {
-  const { skill, company, position, description, proof_urls } = req.body;
-  if (!skill || !description) return res.status(400).json({ error: "skill and description required" });
+  const user_id = req.user.user_id;
 
-  const pending = await prisma.expert_requests.findFirst({ where: { user_id: req.user.user_id, status: "pending" } });
-  if (pending) return res.status(409).json({ error: "You already have a pending request" });
+  const {
+    company = null,
+    position = null,
+    skill,
+    description,
+    proof_urls = [],
+  } = req.body;
 
+  // Basic validation
+  if (!skill || !String(skill).trim()) {
+    return res.status(400).json({ error: "skill is required" });
+  }
+  if (!description || !String(description).trim()) {
+    return res.status(400).json({ error: "description is required" });
+  }
+
+  // Normalize proof URLs array
+  let proof_url = "[]";
+  if (Array.isArray(proof_urls) && proof_urls.length > 0) {
+    proof_url = JSON.stringify(proof_urls);
+  }
+
+  // Create the expert request (no price model / amount here!)
   const created = await prisma.expert_requests.create({
     data: {
-      user_id: req.user.user_id,
+      user_id,
       company: company || null,
       position: position || null,
-      skill,
-      description,
-      proof_url: (Array.isArray(proof_urls) && proof_urls.length) ? JSON.stringify(proof_urls) : null,
-      status: "pending"
-    }
+      skill: String(skill).trim(),
+      description: String(description).trim(),
+      proof_url,
+      status: "pending",
+    },
+    select: {
+      request_id: true,
+      status: true,
+      created_at: true,
+    },
   });
 
-  await notify({ user_id: req.user.user_id, title: "Expert request submitted", body: "We’ll notify you after review." });
-  res.json(created);
+  return res.json({ ok: true, request: created });
 }));
 
-app.get("/api/expert-requests/me", auth, asyncRoute(async (req, res) => {
-  const [expertProfile, lastRequest] = await Promise.all([
-    prisma.expert_profiles.findUnique({
-      where: { expert_id: req.user.user_id },
-      select: { expert_id: true, price_model: true, price_amount: true, currency: true, is_verified: true, overall_rating: true }
-    }),
-    prisma.expert_requests.findFirst({ where: { user_id: req.user.user_id }, orderBy: { created_at: "desc" } })
-  ]);
-  res.json({ isExpert: !!expertProfile, expertProfile, lastRequest });
-}));
 
-// admin list
-app.get("/api/admin/expert-requests", auth, adminOnly, asyncRoute(async (req, res) => {
-  const status = (req.query.status || "pending").toString();
-  const items = await prisma.expert_requests.findMany({
-    where: { status },
-    orderBy: { created_at: "desc" },
-    include: { users: { select: { user_id: true, username: true, first_name: true, last_name: true, email: true, avatar: true } } }
-  });
-  res.json(items);
-}));
 
-// admin decision (request_id)
-app.patch("/api/admin/expert-requests/:id/decision", auth, adminOnly, async (req, res) => {
-  try {
+// =========================
+// ADMIN • Expert Requests — LIST
+// GET /api/admin/expert-requests?status=pending|approved|rejected
+// =========================
+app.get(
+  "/api/admin/expert-requests",
+  auth,
+  adminOnly,
+  asyncRoute(async (req, res) => {
+    const status = (req.query.status || "").toString();
+    const where = status ? { status } : {};
+
+    const rows = await prisma.expert_requests.findMany({
+      where,
+      orderBy: { request_id: "desc" },
+      select: {
+        request_id: true,
+        user_id: true,
+        company: true,
+        position: true,
+        skill: true,
+        description: true,
+        proof_url: true,
+        status: true,
+        admin_message: true,
+        created_at: true,
+        reviewed_at: true,
+        // requester basic info for avatar/name
+        users: {
+          select: {
+            user_id: true,
+            first_name: true,
+            last_name: true,
+            username: true,
+            email: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+
+    res.json(rows);
+  })
+);
+
+
+
+
+
+app.patch("/api/admin/expert-requests/:id/decision",
+  auth, adminOnly,
+  asyncRoute(async (req, res) => {
     const request_id = Number(req.params.id);
-    const { decision, admin_message } = req.body; // "approved" | "rejected"
+    const { decision, message = "", price_model: bodyModel, price_amount: bodyAmount } = req.body; // optional pricing
     if (!["approved", "rejected"].includes(decision)) {
       return res.status(400).json({ error: "decision must be approved or rejected" });
     }
 
-    const reqRow = await prisma.expert_requests.findUnique({ where: { request_id } });
-    if (!reqRow) return res.status(404).json({ error: "Request not found" });
-    if (reqRow.status !== "pending") return res.status(400).json({ error: "Request is not pending" });
-
-    const updated = await prisma.expert_requests.update({
+    // Load request + user (avatar for UI). Only select fields that exist in your schema.
+    const er = await prisma.expert_requests.findUnique({
       where: { request_id },
-      data: { status: decision, admin_message: admin_message || null, reviewed_at: new Date() }
+      select: {
+        request_id: true,
+        user_id: true,
+        status: true,
+        company: true,
+        position: true,
+        skill: true,
+        description: true,
+        proof_url: true,
+        users: { select: { user_id: true, first_name: true, last_name: true, username: true, avatar: true } },
+      },
     });
+
+    if (!er) return res.status(404).json({ error: "Request not found" });
+    if (er.status !== "pending") return res.status(400).json({ error: "Request is not pending" });
 
     if (decision === "approved") {
+      // Pricing comes from admin's body; fallback to safe defaults
+      const priceModel = (bodyModel === "monthly" || bodyModel === "per_question") ? bodyModel : "per_chat";
+      const amountNum = Number(bodyAmount);
+      const priceAmount = Number.isFinite(amountNum) && amountNum > 0 ? amountNum : 5;
+
+      // Prepare upsert payload
+      const createData = {
+        expert_id: er.user_id,
+        price_model: priceModel,
+        price_amount: priceAmount,
+        currency: "USD",
+        is_verified: true,
+        overall_rating: 0,
+      };
+      const updateData = {
+        price_model: priceModel,
+        price_amount: priceAmount,
+        currency: "USD",
+        is_verified: true,
+        updated_at: new Date(),
+      };
+
+      // copy extended fields into expert_profiles only if those columns exist
+      const hasField = (model, field) =>
+        !!(prisma[model]?.fields?.find?.((f) => f.name === field));
+
+      if (hasField("expert_profiles", "company"))        { createData.company = er.company || null;        updateData.company = er.company || null; }
+      if (hasField("expert_profiles", "position"))       { createData.position = er.position || null;       updateData.position = er.position || null; }
+      if (hasField("expert_profiles", "primary_skill"))  { createData.primary_skill = er.skill || null;     updateData.primary_skill = er.skill || null; }
+      if (hasField("expert_profiles", "description"))    { createData.description = er.description || null; updateData.description = er.description || null; }
+      if (hasField("expert_profiles", "proof_urls") && er.proof_url) {
+        // your table stores a single string; normalize into a JSON array if possible
+        try { createData.proof_urls = JSON.parse(er.proof_url); updateData.proof_urls = JSON.parse(er.proof_url); } catch {}
+      }
+
       await prisma.expert_profiles.upsert({
-        where: { expert_id: reqRow.user_id },
-        update: { is_verified: true },
-        create: { expert_id: reqRow.user_id, is_verified: true, price_model: "per_chat", price_amount: 5, currency: "USD" }
+        where: { expert_id: er.user_id },
+        update: updateData,
+        create: createData,
       });
+
+      await prisma.expert_requests.update({
+        where: { request_id },
+        data: { status: "approved", reviewed_at: new Date(), admin_message: message || null },
+      });
+
+      await prisma.notifications.create({
+        data: { user_id: er.user_id, title: "Expert request approved", body: message || "Congrats! Your expert profile is live." },
+      });
+
+      return res.json({ ok: true });
     }
 
-    await prisma.notifications.create({
-      data: {
-        user_id: reqRow.user_id,
-        title: decision === "approved" ? "Your expert request was approved" : "Your expert request was rejected",
-        body: admin_message || (decision === "approved" ? "Welcome aboard!" : "Please improve your proof and try again."),
-        is_read: false
-      }
+    // rejected
+    await prisma.expert_requests.update({
+      where: { request_id },
+      data: { status: "rejected", reviewed_at: new Date(), admin_message: message || null },
     });
+    await prisma.notifications.create({
+      data: { user_id: er.user_id, title: "Expert request rejected", body: message || "Your request was rejected." },
+    });
+    res.json({ ok: true });
+  })
+);
 
-    res.json({ ok: true, updated });
-  } catch (e) {
-    console.error("PATCH /api/admin/expert-requests/:id/decision", e);
-    res.status(500).json({ error: e.message });
-  }
-});
+
+
 
 /* ----------------------------------
    Profile Change Requests (user + admin)
@@ -766,56 +1067,98 @@ app.get("/api/admin/profile-requests", auth, adminOnly, asyncRoute(async (_req, 
   res.json(items);
 }));
 
-// decision (req_id)
-app.patch("/api/admin/profile-requests/:id/decision", auth, adminOnly, async (req, res) => {
-  try {
-    const req_id = Number(req.params.id);
-    const { decision, message = "" } = req.body; // "approved" | "rejected"
-    if (!["approved", "rejected"].includes(decision)) {
-      return res.status(400).json({ error: "decision must be approved or rejected" });
-    }
+// PATCH /api/admin/profile-requests/:id/decision
+app.patch("/api/admin/profile-requests/:id/decision", auth, adminOnly, asyncRoute(async (req, res) => {
+  const id = Number(req.params.id);
+  const { decision, message = "" } = req.body; // "approved" | "rejected"
 
-    const pr = await prisma.profile_change_requests.findUnique({ where: { req_id } });
-    if (!pr) return res.status(404).json({ error: "Request not found" });
-    if (pr.status !== "pending") return res.status(400).json({ error: "Request is not pending" });
-
-    // parse payload (TEXT)
-    let changes = {};
-    try { changes = pr.payload ? JSON.parse(pr.payload) : {}; } catch { changes = {}; }
-
-    if (decision === "approved") {
-      const updates = {};
-      for (const k of Object.keys(changes)) {
-        if (ALLOWED_PROFILE_FIELDS.has(k)) {
-          const val = String(changes[k] ?? "").trim();
-          if (val) updates[k] = val;
-        }
-      }
-      if (Object.keys(updates).length) {
-        await prisma.users.update({ where: { user_id: pr.user_id }, data: updates });
-      }
-    }
-
-    const updated = await prisma.profile_change_requests.update({
-      where: { req_id },
-      data: { status: decision, admin_message: message || null, reviewed_at: new Date() }
-    });
-
-    await prisma.notifications.create({
-      data: {
-        user_id: pr.user_id,
-        title: `Profile change ${decision}`,
-        body: message || (decision === "approved" ? "Your profile has been updated." : "Your request was rejected."),
-        is_read: false
-      }
-    });
-
-    res.json({ ok: true, updated });
-  } catch (e) {
-    console.error("PATCH /api/admin/profile-requests/:id/decision", e);
-    res.status(500).json({ error: "Decision failed" });
+  if (!["approved", "rejected"].includes(decision)) {
+    return res.status(400).json({ error: "decision must be approved or rejected" });
   }
-});
+
+  // NOTE: profile-requests uses `req_id` (not request_id)
+  const pr = await prisma.profile_change_requests.findUnique({ where: { req_id: id } });
+  if (!pr) return res.status(404).json({ error: "Request not found" });
+  if (pr.status !== "pending") return res.status(400).json({ error: "Request is not pending" });
+
+  if (decision === "approved") {
+    // ----- apply basic user field changes (from `payload`) -----
+    const payload = pr.payload ? JSON.parse(pr.payload) : {}; // { first_name?, last_name?, username?, profession?, bio?, avatar?, cover_photo? ... }
+
+    const userUpdates = {
+      first_name: payload.first_name ?? undefined,
+      last_name: payload.last_name ?? undefined,
+      username: payload.username ?? undefined,
+      profession: payload.profession ?? undefined,
+      bio: payload.bio ?? undefined,
+      avatar: payload.avatar ?? undefined,
+      cover_photo: payload.cover_photo ?? undefined
+    };
+    const cleanUserUpdates = Object.fromEntries(
+      Object.entries(userUpdates).filter(([, v]) => v !== undefined)
+    );
+
+    if (Object.keys(cleanUserUpdates).length) {
+      await prisma.users.update({
+        where: { user_id: pr.user_id },
+        data: cleanUserUpdates
+      });
+    }
+
+    // ----- apply expert edits if present (from `expert_changes`) -----
+    const expertChanges = pr.expert_changes ? JSON.parse(pr.expert_changes) : null;
+    if (expertChanges) {
+      const {
+        company = null,
+        position = null,
+        primary_skill = null,
+        description = null,
+        proof_urls = null,      // expect array, we store as JSON column
+        price_model = null,     // 'monthly' | 'per_chat' | 'per_question'
+        price_amount = null
+      } = expertChanges;
+
+      const epData = {};
+      if (company !== null)        epData.company = company;
+      if (position !== null)       epData.position = position;
+      if (primary_skill !== null)  epData.primary_skill = primary_skill;
+      if (description !== null)    epData.description = description;
+      if (Array.isArray(proof_urls)) epData.proof_urls = proof_urls;
+      if (price_model)             epData.price_model = price_model;
+      if (price_amount != null)    epData.price_amount = Number(price_amount);
+
+      if (Object.keys(epData).length) {
+        await prisma.expert_profiles.upsert({
+          where: { expert_id: pr.user_id },
+          update: epData,
+          create: { expert_id: pr.user_id, currency: "USD", is_verified: 1, ...epData }
+        });
+      }
+    }
+  }
+
+  // mark request decided (NO reviewer_id)
+  const updated = await prisma.profile_change_requests.update({
+    where: { req_id: id },
+    data: {
+      status: decision,
+      reviewed_at: new Date(),
+      admin_message: message
+    }
+  });
+
+  // notify requester
+  await prisma.notifications.create({
+    data: {
+      user_id: pr.user_id,
+      title: `Profile change ${decision}`,
+      body: message || "",
+      is_read: false
+    }
+  });
+
+  res.json({ ok: true, updated });
+}));
 
 /* ----------------------------------
    Admin: summary, users, deleted, tx, stats
@@ -913,13 +1256,79 @@ app.get("/api/admin/deleted-users", auth, adminOnly, asyncRoute(async (_req, res
   res.json(items);
 }));
 
-app.get("/api/admin/transactions", auth, adminOnly, asyncRoute(async (_req, res) => {
-  const items = await prisma.payments.findMany({
-    orderBy: { created_at: "desc" },
-    include: { users_payments_payer_idTousers: true, users_payments_expert_idTousers: true, subscriptions: true }
-  });
-  res.json(items);
-}));
+
+
+
+
+app.get(
+  "/api/admin/transactions",
+  auth,
+  adminOnly,
+  asyncRoute(async (req, res) => {
+    const page  = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit || 25)));
+    const skip  = (page - 1) * limit;
+
+    const kind   = (req.query.kind   || "").trim();   // 'credit' | 'debit' | ''
+    const method = (req.query.method || "").trim();   // 'bkash' | 'dev' | '' etc
+    const q      = (req.query.q      || "").trim();   // search by name/username/email
+
+    // Build filters
+    const where = {
+      ...(kind   ? { kind } : {}),
+      ...(method ? { method } : {}),
+      ...(q
+        ? {
+            OR: [
+              { users: { username:   { contains: q } } },
+              { users: { first_name: { contains: q } } },
+              { users: { last_name:  { contains: q } } },
+              { users: { email:      { contains: q } } },
+            ],
+          }
+        : {}),
+    };
+
+    const total = await prisma.wallet_transactions.count({ where });
+
+    const rows = await prisma.wallet_transactions.findMany({
+      where,
+      orderBy: { tx_id: "desc" },
+      skip,
+      take: limit,
+      include: {
+        users: {
+          select: {
+            user_id: true,
+            username: true,
+            first_name: true,
+            last_name: true,
+            avatar: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    const items = rows.map((r) => ({
+      tx_id: Number(r.tx_id),
+      user_id: r.user_id,
+      amount: Number(r.amount),
+      kind: r.kind,             // 'credit' | 'debit'
+      method: r.method,         // 'bkash' | 'dev' | ...
+      reference: r.reference,   // optional string/NULL
+      gateway_ref: r.gateway_ref ?? null, // if you keep it
+      note: r.note ?? "",
+      created_at: r.created_at,
+      user: r.users,
+    }));
+
+    res.json({ page, limit, total, items });
+  })
+);
+
+
+
 app.get("/api/admin/statistics", auth, adminOnly, asyncRoute(async (req, res) => {
   const { range = "30d" } = req.query;
   const now = new Date();
@@ -954,6 +1363,203 @@ app.patch("/api/notifications/read-all", auth, asyncRoute(async (req, res) => {
   const result = await prisma.notifications.updateMany({ where: { user_id: req.user.user_id, is_read: false }, data: { is_read: true } });
   res.json({ ok: true, updated: result.count });
 }));
+
+
+
+/* =========================
+   WALLET
+   ========================= */
+
+// Get balance
+app.get("/api/wallet/balance", auth, asyncRoute(async (req, res) => {
+  const me = await prisma.users.findUnique({
+    where: { user_id: req.user.user_id },
+    select: { wallet: true }
+  });
+  res.json({ balance: Number(me?.wallet || 0) });
+}));
+
+// My transactions (latest first)
+app.get("/api/wallet/transactions", auth, asyncRoute(async (req, res) => {
+  const items = await prisma.wallet_transactions.findMany({
+    where: { user_id: req.user.user_id },
+    orderBy: { tx_id: "desc" },
+    take: 200,
+    select: {
+      tx_id: true, amount: true, kind: true, method: true,
+      reference: true, note: true, gateway_ref: true, created_at: true
+    }
+  });
+  // normalize amounts
+  res.json({ items: items.map(i => ({ ...i, amount: Number(i.amount) })) });
+}));
+
+
+// Start a top-up via bKash (create pending ledger row, get redirect URL)
+app.post("/api/wallet/topup/init", auth, asyncRoute(async (req, res) => {
+  const { amount } = req.body;
+  const amt = Number(amount);
+  if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ error: "Invalid amount" });
+
+  // Create a pending row (credit) - NOTE: no “status” column in your schema
+  const txRow = await prisma.wallet_transactions.create({
+    data: {
+      user_id: req.user.user_id,
+      amount: new Prisma.Decimal(amt),
+      kind: "credit",
+      method: "bkash",
+      gateway_ref: null,
+      note: "init",
+    },
+    select: { tx_id: true },
+  });
+
+  const data = await bkashCreate(amt);
+  if (!data?.bkashURL || !data?.paymentID) {
+    return res.status(500).json({ error: "bKash create failed" });
+  }
+
+  await prisma.wallet_transactions.update({
+    where: { tx_id: txRow.tx_id },
+    data: { gateway_ref: data.paymentID, note: "created" },
+  });
+
+  res.json({ url: data.bkashURL });
+}));
+
+// bKash callback (server-to-server) → credit wallet once
+app.get("/api/wallet/bkash/callback", asyncRoute(async (req, res) => {
+  try {
+    if (req.query.status !== "success") return res.redirect(bkashCfg.frontFail);
+
+    const { paymentID } = req.query;
+    if (!paymentID) return res.redirect(bkashCfg.frontFail);
+
+    const exec = await bkashExecute(paymentID);
+    if (exec?.statusCode !== "0000") {
+      // mark the row note as failed (no status column in your schema)
+      await prisma.wallet_transactions.updateMany({
+        where: { gateway_ref: paymentID },
+        data: { note: "execute failed" },
+      });
+      return res.redirect(bkashCfg.frontFail);
+    }
+
+    // Find the tx row
+    const tx = await prisma.wallet_transactions.findFirst({
+      where: { gateway_ref: paymentID },
+      select: { tx_id: true, user_id: true, amount: true, note: true },
+    });
+    if (!tx) return res.redirect(bkashCfg.frontFail);
+
+    // Idempotent credit: only once; we use a note marker “credited”
+    if (tx.note !== "credited") {
+      await prisma.$transaction([
+        prisma.users.update({
+          where: { user_id: tx.user_id },
+          data: { wallet: { increment: tx.amount } },
+        }),
+        prisma.wallet_transactions.update({
+          where: { tx_id: tx.tx_id },
+          data: { note: "credited" },
+        }),
+      ]);
+    }
+
+    return res.redirect(bkashCfg.frontOk);
+  } catch (e) {
+    console.error("bkash callback error", e);
+    return res.redirect(bkashCfg.frontFail);
+  }
+}));
+
+// dev-only: POST /api/dev/wallet/complete
+// body: { tx_id }
+app.post("/api/dev/wallet/complete", auth, asyncRoute(async (req, res) => {
+  if (process.env.NODE_ENV !== "development") {
+    return res.status(403).json({ error: "dev only" });
+  }
+
+  const tx_id = Number(req.body.tx_id);
+  if (!tx_id) return res.status(400).json({ error: "tx_id required" });
+
+  const txRow = await prisma.wallet_transactions.findUnique({
+    where: { tx_id },
+    select: { tx_id: true, user_id: true, amount: true, kind: true, note: true },
+  });
+  if (!txRow) return res.status(404).json({ error: "tx not found" });
+
+  // idempotency: if we've stamped it already, don't double-apply
+  if ((txRow.note || "").includes("[dev-complete]")) {
+    return res.json({ ok: true, note: "already applied" });
+  }
+
+  // Only credit if it is a credit tx
+  if (txRow.kind !== "credit") {
+    return res.status(400).json({ error: "tx is not a credit" });
+  }
+
+  await prisma.$transaction(async (t) => {
+    await t.users.update({
+      where: { user_id: txRow.user_id },
+      data: { wallet: { increment: txRow.amount } },
+    });
+    await t.wallet_transactions.update({
+      where: { tx_id: txRow.tx_id },
+      data: { note: `${txRow.note || ""} [dev-complete]` },
+    });
+  });
+
+  const me = await prisma.users.findUnique({
+    where: { user_id: txRow.user_id },
+    select: { wallet: true },
+  });
+
+  res.json({ ok: true, balance: Number(me?.wallet || 0) });
+}));
+
+app.post("/api/wallet/topup/dev", auth, asyncRoute(async (req, res) => {
+  if (process.env.NODE_ENV !== "development") {
+    return res.status(403).json({ error: "dev only" });
+  }
+
+  const user_id = req.user.user_id;
+  const amount = Number(req.body.amount || 0);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return res.status(400).json({ error: "amount must be > 0" });
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    // 1) credit wallet
+    const { wallet } = await tx.users.update({
+      where: { user_id },
+      data: { wallet: { increment: new Prisma.Decimal(amount) } },
+      select: { wallet: true },
+    });
+
+    // 2) ledger row (no "status" field in schema)
+    const txRow = await tx.wallet_transactions.create({
+      data: {
+        user_id,
+        amount: new Prisma.Decimal(amount),
+        kind: "credit",
+        method: "dev",
+        reference: null,
+        note: "Dev topup",
+      },
+      select: { tx_id: true, created_at: true },
+    });
+
+    return { balance: wallet, tx: txRow };
+  });
+
+  res.json({ ok: true, ...result });
+}));
+
+
+
+
+
 
 /* ----------------------------------
    Errors & start

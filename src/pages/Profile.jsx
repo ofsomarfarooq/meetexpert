@@ -7,39 +7,38 @@ import StarRating from "../components/StarRating.jsx";
 import http from "../api/http";
 import { useAuth } from "../store/auth";
 
-/* ---------- small helpers that match server upload endpoints ---------- */
-
-// --- API origin + absolute URL resolver for uploaded files ---
+/* -------------------- helpers: API origin + uploaders -------------------- */
 const API_ORIGIN =
   (import.meta.env.VITE_API_ORIGIN?.replace(/\/$/, "")) ||
   (typeof window !== "undefined"
-    ? (window.__API_ORIGIN__ || "http://localhost:5000")
+    ? window.__API_ORIGIN__ || "http://localhost:5000"
     : "http://localhost:5000");
 
-function absUrl(u) {
+const absUrl = (u) => {
   if (!u) return "";
-  if (/^https?:\/\//i.test(u)) return u;     // already absolute
+  if (/^https?:\/\//i.test(u)) return u;
   return `${API_ORIGIN}${u.startsWith("/") ? u : `/${u}`}`;
-}
+};
 
-
-async function uploadAvatar(file) {
+const uploadAvatar = async (file) => {
   const fd = new FormData();
   fd.append("file", file);
   const { data } = await http.post("/upload/avatar", fd, {
     headers: { "Content-Type": "multipart/form-data" },
   });
   return data; // { ok, url }
-}
-async function uploadCover(file) {
+};
+
+const uploadCover = async (file) => {
   const fd = new FormData();
   fd.append("file", file);
   const { data } = await http.post("/upload/cover", fd, {
     headers: { "Content-Type": "multipart/form-data" },
   });
   return data; // { ok, url }
-}
-async function uploadProofs(files = []) {
+};
+
+const uploadProofs = async (files = []) => {
   if (!files.length) return { urls: [] };
   const fd = new FormData();
   [...files].forEach((f) => fd.append("files", f));
@@ -47,7 +46,7 @@ async function uploadProofs(files = []) {
     headers: { "Content-Type": "multipart/form-data" },
   });
   return data; // { ok, urls: [] }
-}
+};
 
 export default function Profile() {
   const { id } = useParams();
@@ -57,7 +56,7 @@ export default function Profile() {
   const isOwner = user?.user_id === userId;
 
   // data
-  const [profile, setProfile] = useState(null);
+  const [profile, setProfile] = useState(null); // mix of users + expert_profiles fields
   const [isExpert, setIsExpert] = useState(false);
   const [ratings, setRatings] = useState(null);
   const [posts, setPosts] = useState([]);
@@ -69,7 +68,7 @@ export default function Profile() {
   const [review, setReview] = useState("");
   const [ratingBusy, setRatingBusy] = useState(false);
 
-  // post composer
+  // write post
   const [postOpen, setPostOpen] = useState(false);
   const [postTitle, setPostTitle] = useState("");
   const [postBody, setPostBody] = useState("");
@@ -77,33 +76,39 @@ export default function Profile() {
 
   // modals
   const [editModal, setEditModal] = useState(false);
-  const [expertDetailsOpen, setExpertDetailsOpen] = useState(false);
   const [beModal, setBeModal] = useState(false);
+  const [expertDetailsOpen, setExpertDetailsOpen] = useState(false);
 
-  // become-expert fields
+  // skills (for Become Expert)
   const [skillOptions, setSkillOptions] = useState([]);
   const [beSkill, setBeSkill] = useState("");
-  const [newSkillName, setNewSkillName] = useState("");
+  const [beSkillOther, setBeSkillOther] = useState("");
+
+  // pricing (used only when owner edits expert details -> profile-requests)
+  const [bePriceModel, setBePriceModel] = useState("per_chat"); // monthly | per_chat | per_question
+  const [bePriceAmount, setBePriceAmount] = useState("5");
+
+  // expert details inputs
   const [beCompany, setBeCompany] = useState("");
   const [bePosition, setBePosition] = useState("");
   const [beDesc, setBeDesc] = useState("");
   const [proofFiles, setProofFiles] = useState([]);
   const [beBusy, setBeBusy] = useState(false);
 
-  /* ------------------------------ load profile ------------------------------ */
+  /* ----------------------------- load profile ----------------------------- */
   useEffect(() => {
     let alive = true;
     (async () => {
       setLoading(true);
       setErr("");
       try {
-        // try expert view first
+        // try expert profile first
         let exp = null;
         try {
           const { data } = await http.get(`/experts/${userId}`);
           exp = data;
         } catch {
-          /* not an expert */
+          /* not expert yet */
         }
 
         if (!alive) return;
@@ -131,12 +136,13 @@ export default function Profile() {
         if (alive) setLoading(false);
       }
     })();
+
     return () => {
       alive = false;
     };
   }, [userId]);
 
-  /* ------------------------ load skills when modal opens -------------------- */
+  /* ---------------------- load skill options when open --------------------- */
   useEffect(() => {
     if (!beModal) return;
     (async () => {
@@ -149,17 +155,15 @@ export default function Profile() {
     })();
   }, [beModal]);
 
-  /* ---------------------------- derived rating UI --------------------------- */
+  /* --------------------------- derived numbers ---------------------------- */
   const headerRating = useMemo(() => {
-    if (isExpert) {
-      const avg = profile?.rating?.avg ?? profile?.overall_rating ?? 0;
-      const total = profile?.rating?.total ?? 0;
-      return { avg, total };
-    }
-    return { avg: 0, total: 0 };
+    if (!isExpert) return { avg: 0, total: 0 };
+    const avg = profile?.rating?.avg ?? profile?.overall_rating ?? 0;
+    const total = profile?.rating?.total ?? 0;
+    return { avg, total };
   }, [profile, isExpert]);
 
-  /* --------------------------------- rating -------------------------------- */
+  /* --------------------------------- rating ------------------------------- */
   const submitRating = async () => {
     if (!token) return nav("/login");
     if (!stars) return setErr("Please select a rating (1–5).");
@@ -182,21 +186,18 @@ export default function Profile() {
     }
   };
 
-  /* -------------------------------- open chat ------------------------------- */
+  /* ------------------------------ open chat ------------------------------- */
   const openChat = async () => {
     try {
       if (!token) return nav("/login");
       await http.post("/chats/open", { expert_id: userId });
       nav("/inbox");
     } catch (e) {
-      alert(
-        e.response?.data?.error ||
-          "Cannot open chat. Do you have an active subscription?"
-      );
+      alert(e.response?.data?.error || "No active subscription with this expert.");
     }
   };
 
-  /* --------------------------------- posts --------------------------------- */
+  /* ------------------------------ create post ----------------------------- */
   const createPost = async () => {
     if (!token) return nav("/login");
     if (!postTitle.trim() || !postBody.trim()) return;
@@ -230,43 +231,65 @@ export default function Profile() {
     }
   };
 
-  /* -------- become expert OR edit expert details (if already expert) -------- */
+  /* ------------- become expert (or edit expert details if owner) ---------- */
   const submitBecomeExpert = async () => {
     if (!token) return nav("/login");
+
     const effectiveSkill =
-      beSkill === "__other"
-        ? (newSkillName || "").trim()
-        : (beSkill || "").trim();
-    if (!effectiveSkill || !beDesc.trim()) return;
+      beSkill === "__other" ? (beSkillOther || "").trim() : (beSkill || "").trim();
+
+    if (!effectiveSkill || !beDesc.trim()) {
+      return alert("Skill and description are required.");
+    }
 
     setBeBusy(true);
     try {
-      if (beSkill === "__other" && newSkillName.trim()) {
-        await http.post("/skills", { name: newSkillName.trim() });
+      // If "Other", create the skill first (best effort)
+      if (beSkill === "__other" && beSkillOther.trim()) {
+        try {
+          await http.post("/skills", { name: beSkillOther.trim() });
+        } catch {
+          /* ignore */
+        }
       }
 
+      // Upload proofs first
       const { urls = [] } = await uploadProofs(proofFiles);
-      const payload = {
-        skill: effectiveSkill,
-        company: beCompany.trim() || null,
-        position: bePosition.trim() || null,
-        description: beDesc.trim(),
-        proof_urls: urls,
-      };
 
       if (isExpert && isOwner) {
-        // re-use modal to ask admin for expert detail changes
-        await http.post("/profile-requests", { expert_changes: payload });
+        // OWNER EDITS EXPERT DETAILS -> goes to admin as profile change
+        await http.post("/profile-requests", {
+          payload: {}, // not changing basic user fields here
+          expert_changes: {
+            company: beCompany.trim() || null,
+            position: bePosition.trim() || null,
+            primary_skill: effectiveSkill,
+            description: beDesc.trim(),
+            proof_urls: urls,
+            // Pricing included here (NOT in expert-requests)
+            price_model: bePriceModel,
+            price_amount: Number(bePriceAmount || 0),
+          },
+        });
       } else {
-        await http.post("/expert-requests", payload);
+        // NEW BECOME-EXPERT REQUEST — DO NOT SEND price_model/price_amount
+        await http.post("/expert-requests", {
+          company: beCompany.trim() || null,
+          position: bePosition.trim() || null,
+          skill: effectiveSkill,
+          description: beDesc.trim(),
+          proof_urls: urls,
+        });
       }
 
       setBeModal(false);
       setBeCompany("");
       setBePosition("");
       setBeSkill("");
-      setNewSkillName("");
+      setBeSkillOther("");
       setBeDesc("");
+      setBePriceModel("per_chat");
+      setBePriceAmount("5");
       setProofFiles([]);
       alert("Submitted. Admin will review it.");
     } catch (e) {
@@ -276,43 +299,29 @@ export default function Profile() {
     }
   };
 
-  /* -------------------------------- header UI ------------------------------- */
-
-  // Resolve file URLs coming from the API (e.g. "/uploads/abc.jpg") to absolute URLs.
-
-
-
- // Cover image: uses profile.cover_photo if present, else gradient
-const Cover = () => {
-  const cover = profile?.cover_photo ? absUrl(profile.cover_photo) : null;
-  return cover ? (
-    <div
-      className="relative h-44 w-full rounded-2xl bg-center bg-cover"
-      style={{ backgroundImage: `url("${cover}")` }}
-    />
-  ) : (
-    <div className="relative h-44 w-full rounded-2xl bg-gradient-to-r from-primary/20 via-base-200 to-secondary/20" />
-  );
-};
-
-// Avatar image: uses profile.avatar if present, else placeholder
-const Avatar = () => (
-  <div className="avatar -mt-12 ml-6">
-    <div className="w-24 rounded-full ring ring-base-300 ring-offset-2 bg-base-100 overflow-hidden">
-      <img
-        src={
-          profile?.avatar
-            ? absUrl(profile.avatar)
-            : "https://i.pravatar.cc/160"
-        }
-        alt="avatar"
+  /* -------------------------------- header UI ----------------------------- */
+  const Cover = () => {
+    const cover = profile?.cover_photo ? absUrl(profile.cover_photo) : null;
+    return cover ? (
+      <div
+        className="relative h-44 w-full rounded-2xl bg-center bg-cover"
+        style={{ backgroundImage: `url("${cover}")` }}
       />
+    ) : (
+      <div className="relative h-44 w-full rounded-2xl bg-gradient-to-r from-primary/20 via-base-200 to-secondary/20" />
+    );
+  };
+
+  const Avatar = () => (
+    <div className="avatar -mt-12 ml-6">
+      <div className="w-24 rounded-full ring ring-base-300 ring-offset-2 bg-base-100 overflow-hidden">
+        <img
+          src={profile?.avatar ? absUrl(profile.avatar) : "https://i.pravatar.cc/160"}
+          alt="avatar"
+        />
+      </div>
     </div>
-  </div>
-);
-
-
-  
+  );
 
   const HeaderActions = () => (
     <div className="ml-auto flex flex-wrap gap-2">
@@ -324,10 +333,7 @@ const Avatar = () => (
 
       {isExpert ? (
         <>
-          <button
-            className="btn btn-outline"
-            onClick={() => setExpertDetailsOpen(true)}
-          >
+          <button className="btn btn-outline" onClick={() => setExpertDetailsOpen(true)}>
             Expert details
           </button>
           {!isOwner && (
@@ -335,10 +341,7 @@ const Avatar = () => (
               <button className="btn btn-outline" onClick={openChat}>
                 Inbox
               </button>
-              <SubscribeButton
-                expertId={userId}
-                price={profile?.price_amount || 5}
-              />
+              <SubscribeButton expertId={userId} price={profile?.price_amount || 5} />
             </>
           )}
         </>
@@ -352,7 +355,7 @@ const Avatar = () => (
     </div>
   );
 
-  /* ----------------------------- loading / error ---------------------------- */
+  /* ----------------------------- loading / error --------------------------- */
   if (loading) {
     return (
       <>
@@ -378,7 +381,7 @@ const Avatar = () => (
     );
   }
 
-  /* ---------------------------------- view ---------------------------------- */
+  /* ---------------------------------- view --------------------------------- */
   return (
     <>
       <Navbar />
@@ -402,9 +405,7 @@ const Avatar = () => (
 
                 {isExpert ? (
                   <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
-                    <div className="font-medium">
-                      {profile.profession || "—"}
-                    </div>
+                    <div className="font-medium">{profile.profession || "—"}</div>
                     <div className="opacity-70">•</div>
                     <div>
                       {headerRating.avg} ★
@@ -413,15 +414,11 @@ const Avatar = () => (
                     <div className="opacity-70">•</div>
                     <div>
                       ${profile.price_amount ?? 5}{" "}
-                      <span className="opacity-60">
-                        {profile.price_model || "per_chat"}
-                      </span>
+                      <span className="opacity-60">{profile.price_model || "per_chat"}</span>
                     </div>
                   </div>
                 ) : (
-                  <div className="mt-2 text-sm opacity-80">
-                    {profile.profession || "—"}
-                  </div>
+                  <div className="mt-2 text-sm opacity-80">{profile.profession || "—"}</div>
                 )}
               </div>
               <HeaderActions />
@@ -469,16 +466,10 @@ const Avatar = () => (
                             <span className="font-semibold">
                               {r.seeker?.first_name} {r.seeker?.last_name}
                             </span>
-                            <span className="text-xs opacity-70">
-                              @{r.seeker?.username}
-                            </span>
-                            <span className="ml-auto text-sm">
-                              {r.rating_value} ★
-                            </span>
+                            <span className="text-xs opacity-70">@{r.seeker?.username}</span>
+                            <span className="ml-auto text-sm">{r.rating_value} ★</span>
                           </div>
-                          {r.review && (
-                            <div className="mt-1 text-sm">{r.review}</div>
-                          )}
+                          {r.review && <div className="mt-1 text-sm">{r.review}</div>}
                           <div className="text-xs opacity-50 mt-1">
                             {new Date(r.created_at).toLocaleString()}
                           </div>
@@ -495,11 +486,7 @@ const Avatar = () => (
               <div className="card-body">
                 <h2 className="card-title">About</h2>
                 <div className="prose max-w-none">
-                  {profile.bio?.trim() ? (
-                    profile.bio
-                  ) : (
-                    <span className="opacity-60">No bio yet.</span>
-                  )}
+                  {profile.bio?.trim() ? profile.bio : <span className="opacity-60">No bio yet.</span>}
                 </div>
               </div>
             </div>
@@ -512,10 +499,7 @@ const Avatar = () => (
                 <div className="card-body">
                   <div className="flex items-center justify-between">
                     <h2 className="card-title">Write Post</h2>
-                    <button
-                      className="btn btn-primary btn-sm"
-                      onClick={() => setPostOpen(true)}
-                    >
+                    <button className="btn btn-primary btn-sm" onClick={() => setPostOpen(true)}>
                       New Post
                     </button>
                   </div>
@@ -527,9 +511,7 @@ const Avatar = () => (
               {posts.length === 0 ? (
                 <div className="card bg-base-100 border shadow-sm">
                   <div className="card-body">
-                    <div className="opacity-70">
-                      No public posts from this user.
-                    </div>
+                    <div className="opacity-70">No public posts from this user.</div>
                   </div>
                 </div>
               ) : (
@@ -541,14 +523,10 @@ const Avatar = () => (
                           {p.author?.first_name} {p.author?.last_name}
                         </span>
                         <span>@{p.author?.username}</span>
-                        <span className="ml-auto">
-                          {new Date(p.created_at).toLocaleString()}
-                        </span>
+                        <span className="ml-auto">{new Date(p.created_at).toLocaleString()}</span>
                       </div>
                       <h3 className="font-semibold text-lg">{p.title}</h3>
-                      <p className="opacity-90 whitespace-pre-wrap">
-                        {p.content}
-                      </p>
+                      <p className="opacity-90 whitespace-pre-wrap">{p.content}</p>
                     </div>
                   </div>
                 ))
@@ -580,32 +558,23 @@ const Avatar = () => (
               <button className="btn" onClick={() => setPostOpen(false)}>
                 Cancel
               </button>
-              <button
-                className="btn btn-primary"
-                disabled={postBusy}
-                onClick={createPost}
-              >
+              <button className="btn btn-primary" disabled={postBusy} onClick={createPost}>
                 {postBusy ? "Publishing…" : "Publish"}
               </button>
             </div>
           </div>
-          <form
-            method="dialog"
-            className="modal-backdrop"
-            onClick={() => setPostOpen(false)}
-          >
+          <form method="dialog" className="modal-backdrop" onClick={() => setPostOpen(false)}>
             <button>close</button>
           </form>
         </dialog>
       )}
 
-      {/* Edit Profile Modal */}
+      {/* Edit Profile Modal (avatar+cover upload instantly; other fields require admin) */}
       {editModal && (
         <dialog open className="modal">
           <div className="modal-box max-w-xl">
             <h3 className="font-bold text-lg mb-3">Edit Profile</h3>
 
-            {/* avatar & cover (instant) */}
             <label className="text-sm font-medium">Avatar</label>
             <input
               type="file"
@@ -683,13 +652,11 @@ const Avatar = () => (
                 className="btn btn-primary"
                 onClick={async () => {
                   try {
-                    // server accepts either raw fields or { payload }
                     const payload = {
                       first_name: document.getElementById("fn").value.trim(),
                       last_name: document.getElementById("ln").value.trim(),
                       username: document.getElementById("un").value.trim(),
-                      profession:
-                        document.getElementById("prof").value.trim() || null,
+                      profession: document.getElementById("prof").value.trim() || null,
                       bio: document.getElementById("bio").value || null,
                     };
                     await http.post("/profile-requests", payload);
@@ -697,8 +664,7 @@ const Avatar = () => (
                     alert("Submitted for admin review.");
                   } catch (e) {
                     alert(
-                      e.response?.data?.error ||
-                        "Failed to submit profile change request"
+                      e.response?.data?.error || "Failed to submit profile change request"
                     );
                   }
                 }}
@@ -707,17 +673,13 @@ const Avatar = () => (
               </button>
             </div>
           </div>
-          <form
-            method="dialog"
-            className="modal-backdrop"
-            onClick={() => setEditModal(false)}
-          >
+          <form method="dialog" className="modal-backdrop" onClick={() => setEditModal(false)}>
             <button>close</button>
           </form>
         </dialog>
       )}
 
-      {/* Expert details (view) */}
+      {/* Expert details (read-only for visitors; owner gets Edit -> reuses Become Expert modal) */}
       {expertDetailsOpen && (
         <dialog open className="modal">
           <div className="modal-box max-w-2xl">
@@ -725,19 +687,29 @@ const Avatar = () => (
             <div className="space-y-2 text-sm">
               <div>
                 <span className="opacity-70">Pricing:</span> $
-                {profile.price_amount} · {profile.price_model || "per_chat"}
+                {profile.price_amount ?? "—"} · {profile.price_model || "per_chat"}
+              </div>
+              <div>
+                <span className="opacity-70">Primary skill:</span>{" "}
+                {profile.primary_skill || profile.skill || "—"}
+              </div>
+              <div>
+                <span className="opacity-70">Company:</span> {profile.company || "—"}
+              </div>
+              <div>
+                <span className="opacity-70">Position:</span> {profile.position || "—"}
+              </div>
+              <div>
+                <span className="opacity-70">Description:</span>{" "}
+                {profile.description || "—"}
               </div>
               <div>
                 <span className="opacity-70">Rating:</span> {headerRating.avg} ★ (
                 {headerRating.total})
               </div>
-              {/* add more expert fields when you expose them on the API */}
             </div>
             <div className="modal-action">
-              <button
-                className="btn"
-                onClick={() => setExpertDetailsOpen(false)}
-              >
+              <button className="btn" onClick={() => setExpertDetailsOpen(false)}>
                 Close
               </button>
               {isOwner && (
@@ -753,11 +725,7 @@ const Avatar = () => (
               )}
             </div>
           </div>
-          <form
-            method="dialog"
-            className="modal-backdrop"
-            onClick={() => setExpertDetailsOpen(false)}
-          >
+          <form method="dialog" className="modal-backdrop" onClick={() => setExpertDetailsOpen(false)}>
             <button>close</button>
           </form>
         </dialog>
@@ -772,6 +740,7 @@ const Avatar = () => (
             </h3>
 
             <div className="grid gap-2">
+              {/* Skill dropdown + Other */}
               <label className="text-sm font-medium">Primary skill</label>
               <select
                 className="select select-bordered w-full"
@@ -784,18 +753,41 @@ const Avatar = () => (
                     {s.skill_name}
                   </option>
                 ))}
-                <option value="__other">Other (type manually)</option>
+                <option value="__other">Other…</option>
               </select>
-
               {beSkill === "__other" && (
                 <input
                   className="input input-bordered w-full"
-                  placeholder="Type new skill"
-                  value={newSkillName}
-                  onChange={(e) => setNewSkillName(e.target.value)}
+                  placeholder="Write a skill"
+                  value={beSkillOther}
+                  onChange={(e) => setBeSkillOther(e.target.value)}
                 />
               )}
 
+              {/* Pricing (only meaningful when owner edits expert details) */}
+              <label className="text-sm font-medium">Pricing</label>
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  className="select select-bordered w-full"
+                  value={bePriceModel}
+                  onChange={(e) => setBePriceModel(e.target.value)}
+                >
+                  <option value="monthly">Monthly</option>
+                  <option value="per_chat">Per chat</option>
+                  <option value="per_question">Per question</option>
+                </select>
+                <input
+                  className="input input-bordered w-full"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="Amount"
+                  value={bePriceAmount}
+                  onChange={(e) => setBePriceAmount(e.target.value)}
+                />
+              </div>
+
+              {/* Company/Position */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 <input
                   className="input input-bordered w-full"
@@ -811,6 +803,7 @@ const Avatar = () => (
                 />
               </div>
 
+              {/* Description */}
               <textarea
                 className="textarea textarea-bordered w-full"
                 rows={4}
@@ -819,6 +812,7 @@ const Avatar = () => (
                 onChange={(e) => setBeDesc(e.target.value)}
               />
 
+              {/* Proof files */}
               <label className="text-sm font-medium">Proof files</label>
               <input
                 type="file"
@@ -833,11 +827,7 @@ const Avatar = () => (
               <button className="btn" onClick={() => setBeModal(false)}>
                 Cancel
               </button>
-              <button
-                className="btn btn-primary"
-                disabled={beBusy}
-                onClick={submitBecomeExpert}
-              >
+              <button className="btn btn-primary" disabled={beBusy} onClick={submitBecomeExpert}>
                 {beBusy
                   ? "Submitting…"
                   : isExpert && isOwner
@@ -846,11 +836,7 @@ const Avatar = () => (
               </button>
             </div>
           </div>
-          <form
-            method="dialog"
-            className="modal-backdrop"
-            onClick={() => setBeModal(false)}
-          >
+          <form method="dialog" className="modal-backdrop" onClick={() => setBeModal(false)}>
             <button>close</button>
           </form>
         </dialog>

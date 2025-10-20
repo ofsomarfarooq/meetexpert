@@ -18,6 +18,8 @@ import AdminDeletedUsers from "./pages/admin/AdminDeletedUsers.jsx";
 import AdminTransactions from "./pages/admin/AdminTransactions.jsx";
 import AdminStats from "./pages/admin/AdminStats.jsx";
 import AdminGuard from "./pages/admin/AdminGuard.jsx";
+import Wallet from "./pages/Wallet";
+import { WalletSuccess, WalletFail } from "./pages/WalletStatus";
 
 
 export default function App() {
@@ -49,6 +51,12 @@ export default function App() {
 
         {/* Fallback */}
         <Route path="*" element={<div className="p-8">Not Found</div>} />
+
+        <Route path="/wallet" element={<Wallet />} />
+
+        <Route path="/wallet/success" element={<WalletSuccess />} />
+        <Route path="/wallet/fail" element={<WalletFail />} />
+
       </Routes>
     </>
   );

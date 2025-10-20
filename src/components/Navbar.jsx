@@ -1,10 +1,11 @@
 // src/components/Navbar.jsx
 import { Link, useNavigate } from "react-router-dom";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import http from "../api/http";
 import { useAuth } from "../store/auth";
 import NotificationsBell from "./NotificationsBell";
 
+// Build absolute URLs for API-hosted images (avatar/cover)
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
 const toAbsUrl = (u) => {
   if (!u) return "";
@@ -12,17 +13,18 @@ const toAbsUrl = (u) => {
 };
 
 export default function Navbar() {
-  const { user, setAuth, logout, token } = useAuth();
   const navigate = useNavigate();
+  const { user, token, setAuth, logout } = useAuth();
+  const [balance, setBalance] = useState(null);
 
-  // hydrate user if we only have a token (page refresh, etc.)
+  // If we have a token but user is empty (page refresh), hydrate /me
   useEffect(() => {
     (async () => {
-      const { user: u, token: t } = useAuth.getState();
-      if (t && !u) {
+      const st = useAuth.getState();
+      if (st.token && !st.user) {
         try {
           const { data } = await http.get("/me");
-          setAuth({ user: data, token: t });
+          setAuth({ user: data, token: st.token });
         } catch {
           /* ignore */
         }
@@ -30,8 +32,26 @@ export default function Navbar() {
     })();
   }, [setAuth]);
 
-  const avatarSrc =
-    user?.avatar ? toAbsUrl(user.avatar) : "https://i.pravatar.cc/100";
+  // Load wallet balance when logged in
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!token) return setBalance(null);
+      try {
+        const { data } = await http.get("/wallet/balance");
+        if (alive) setBalance(Number(data.balance || 0));
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [token]);
+
+  const avatarSrc = user?.avatar
+    ? toAbsUrl(user.avatar)
+    : "https://i.pravatar.cc/100";
 
   return (
     <div className="sticky top-0 z-50 backdrop-blur-md bg-base-100/80 border-b shadow-sm">
@@ -40,14 +60,15 @@ export default function Navbar() {
           MeetExpert
         </Link>
 
+        {/* Admin shortcut */}
         {String(user?.role).toLowerCase() === "admin" && (
           <Link to="/admin" className="btn btn-sm btn-outline mx-4">
             Go to Admin
           </Link>
         )}
 
+        {/* Center: search (visual only for now) */}
         <div className="flex-1 gap-1">
-          {/* Search (visual only for now) */}
           <div className="hidden md:block">
             <label className="input input-bordered flex items-center gap-2">
               <svg width="18" height="18" viewBox="0 0 24 24" className="opacity-70">
@@ -56,21 +77,42 @@ export default function Navbar() {
                   d="M10 2a8 8 0 105.293 14.293l3.707 3.707 1.414-1.414-3.707-3.707A8 8 0 0010 2zm0 2a6 6 0 110 12A6 6 0 0110 4z"
                 />
               </svg>
-              <input type="text" className="grow" placeholder="Search experts, skills, companies…" />
+              <input
+                type="text"
+                className="grow"
+                placeholder="Search experts, skills, companies…"
+              />
             </label>
           </div>
         </div>
 
+        {/* Right controls */}
         <div className="flex gap-3 items-center">
-          <Link to="/" className="btn btn-ghost">Home</Link>
-          <Link to="/inbox" className="btn btn-ghost">Inbox</Link>
+          <Link to="/" className="btn btn-ghost">
+            Home
+          </Link>
+          <Link to="/inbox" className="btn btn-ghost">
+            Inbox
+          </Link>
 
           {token && <NotificationsBell />}
 
+          {/* Wallet button */}
+          {token && (
+            <Link to="/wallet" className="btn btn-sm btn-outline">
+              Wallet: {balance === null ? "—" : `৳ ${balance.toFixed(2)}`}
+            </Link>
+          )}
+
+          {/* Auth area */}
           {!user ? (
             <div className="flex gap-2">
-              <button className="btn" onClick={() => navigate("/register")}>Register</button>
-              <button className="btn btn-primary" onClick={() => navigate("/login")}>Login</button>
+              <button className="btn" onClick={() => navigate("/register")}>
+                Register
+              </button>
+              <button className="btn btn-primary" onClick={() => navigate("/login")}>
+                Login
+              </button>
             </div>
           ) : (
             <div className="dropdown dropdown-end">
@@ -82,15 +124,21 @@ export default function Navbar() {
                 </div>
                 <span className="hidden md:inline ml-2">@{user.username}</span>
               </div>
-              <ul tabIndex={0} className="dropdown-content menu bg-base-100 rounded-box z-[1] w-60 p-2 shadow">
+              <ul
+                tabIndex={0}
+                className="dropdown-content menu bg-base-100 rounded-box z-[1] w-60 p-2 shadow"
+              >
                 <li className="menu-title px-2">Signed in</li>
                 <li>
-  <Link to={`/profile/${user.user_id}`} className="px-2">
-    {user.first_name} {user.last_name}
-    <span className="opacity-60 ml-1">@{user.username}</span>
-  </Link>
-</li>
-                <li><Link to="/inbox">Inbox</Link></li>
+                  {/* Name is clickable → profile */}
+                  <Link to={`/profile/${user.user_id}`} className="px-2">
+                    {user.first_name} {user.last_name}
+                    <span className="opacity-60 ml-1">@{user.username}</span>
+                  </Link>
+                </li>
+                <li>
+                  <Link to="/inbox">Inbox</Link>
+                </li>
                 <li>
                   <button
                     onClick={() => {
